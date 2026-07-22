@@ -1,0 +1,58 @@
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+
+use rusqlite::Connection;
+
+use crate::error::{CrmError, Result};
+
+const SCHEMA: &str = include_str!("../migrations/001_initial.sql");
+
+pub fn open(path: &Path) -> Result<Connection> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| CrmError::Io {
+            path: parent.to_owned(),
+            source,
+        })?;
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).map_err(|source| {
+            CrmError::Io {
+                path: parent.to_owned(),
+                source,
+            }
+        })?;
+    }
+    let connection = Connection::open(path)?;
+    connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
+    connection.execute_batch(SCHEMA)?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|source| {
+        CrmError::Io {
+            path: path.to_owned(),
+            source,
+        }
+    })?;
+    Ok(connection)
+}
+
+pub fn schema_version(connection: &Connection) -> Result<i64> {
+    connection
+        .query_row(
+            "SELECT version FROM schema_versions ORDER BY version DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migration_is_idempotent() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("crm.sqlite3");
+        drop(open(&path).unwrap());
+        let connection = open(&path).unwrap();
+        assert_eq!(schema_version(&connection).unwrap(), 1);
+    }
+}
