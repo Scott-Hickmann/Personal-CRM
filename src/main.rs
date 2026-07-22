@@ -8,6 +8,7 @@ mod db;
 mod error;
 mod gmail;
 mod graph;
+mod history_commands;
 mod ollama;
 mod output;
 mod query;

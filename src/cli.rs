@@ -47,6 +47,7 @@ pub(crate) enum Command {
         target: SyncTarget,
     },
     Query(QueryArgs),
+    History(HistoryArgs),
     Analyze(AnalyzeArgs),
     Explain(PersonReference),
     Graph(GraphArgs),
@@ -54,6 +55,15 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: AuthCommand,
     },
+}
+
+#[derive(Args)]
+pub(crate) struct HistoryArgs {
+    pub person: String,
+    #[arg(long)]
+    pub channel: Option<String>,
+    #[arg(long, default_value_t = 50)]
+    pub limit: u32,
 }
 
 #[derive(Args)]

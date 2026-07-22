@@ -173,6 +173,10 @@ const PEOPLE: Specification = Specification {
         ("affinity_tier", "p.affinity_tier"),
         ("activity_state", "p.activity_state"),
         (
+            "is_self",
+            "EXISTS(SELECT 1 FROM identities self_identity WHERE self_identity.person_id=p.id AND self_identity.is_self=1)",
+        ),
+        (
             "days_since_meaningful_interaction",
             "CAST(julianday('now') - julianday((SELECT MAX(i.occurred_at) FROM interactions i JOIN interaction_participants ip ON ip.interaction_id=i.id WHERE ip.person_id=p.id AND i.deleted_at IS NULL)) AS INTEGER)",
         ),
