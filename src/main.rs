@@ -3,6 +3,8 @@ mod config;
 mod db;
 mod error;
 mod output;
+mod repository;
+mod source;
 
 use clap::Parser;
 

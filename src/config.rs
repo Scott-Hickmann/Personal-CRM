@@ -66,7 +66,7 @@ impl Config {
                 whatsapp_ids: Vec::new(),
             },
             ollama: OllamaConfig::default(),
-            paths: SourcePaths::default(),
+            paths: SourcePaths::discover()?,
         })
     }
 
@@ -106,6 +106,25 @@ impl Config {
                 path: path.to_owned(),
                 source,
             }
+        })
+    }
+}
+
+impl SourcePaths {
+    fn discover() -> Result<Self> {
+        let home = dirs::home_dir()
+            .ok_or_else(|| CrmError::InvalidConfig("cannot determine home directory".into()))?;
+        let whatsapp = home.join("Library/Group Containers/group.net.whatsapp.WhatsApp.shared");
+        Ok(Self {
+            contacts: Some(
+                home.join("Library/Application Support/AddressBook/AddressBook-v22.abcddb"),
+            ),
+            imessage: Some(home.join("Library/Messages/chat.db")),
+            whatsapp: Some(whatsapp.join("ChatStorage.sqlite")),
+            apple_calls: Some(
+                home.join("Library/Application Support/CallHistoryDB/CallHistory.storedata"),
+            ),
+            whatsapp_calls: Some(whatsapp.join("CallHistory.sqlite")),
         })
     }
 }

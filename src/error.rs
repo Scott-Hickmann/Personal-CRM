@@ -15,6 +15,12 @@ pub enum CrmError {
     },
     #[error("database error: {0}")]
     Database(#[from] rusqlite::Error),
+    #[error("person not found: {0}")]
+    PersonNotFound(String),
+    #[error("person reference is ambiguous: {0}")]
+    AmbiguousPerson(String),
+    #[error("source database is incompatible: {0}")]
+    IncompatibleSource(String),
     #[error("serialization error: {0}")]
     Serialization(String),
     #[error("unsupported platform: this CRM supports macOS only")]
@@ -27,6 +33,8 @@ impl CrmError {
             Self::ConfigExists(_) | Self::InvalidConfig(_) | Self::Serialization(_) => 2,
             Self::ConfigMissing(_) | Self::Io { .. } => 4,
             Self::UnsupportedPlatform => 5,
+            Self::PersonNotFound(_) | Self::AmbiguousPerson(_) => 3,
+            Self::IncompatibleSource(_) => 5,
             Self::Database(_) => 1,
         }
     }
@@ -38,6 +46,9 @@ impl CrmError {
             Self::InvalidConfig(_) => "invalid_config",
             Self::Io { .. } => "io_error",
             Self::Database(_) => "database_error",
+            Self::PersonNotFound(_) => "person_not_found",
+            Self::AmbiguousPerson(_) => "ambiguous_person",
+            Self::IncompatibleSource(_) => "incompatible_source",
             Self::Serialization(_) => "serialization_error",
             Self::UnsupportedPlatform => "unsupported_platform",
         }
