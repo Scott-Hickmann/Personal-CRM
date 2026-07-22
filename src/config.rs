@@ -12,6 +12,8 @@ pub struct Config {
     #[serde(default)]
     pub ollama: OllamaConfig,
     #[serde(default)]
+    pub gmail: GmailConfig,
+    #[serde(default)]
     pub paths: SourcePaths,
 }
 
@@ -31,6 +33,13 @@ pub struct OllamaConfig {
     pub base_url: String,
     pub generation_model: String,
     pub embedding_model: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GmailConfig {
+    pub credentials_path: Option<PathBuf>,
+    #[serde(default)]
+    pub accounts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -66,6 +75,7 @@ impl Config {
                 whatsapp_ids: Vec::new(),
             },
             ollama: OllamaConfig::default(),
+            gmail: GmailConfig::default(),
             paths: SourcePaths::discover()?,
         })
     }
@@ -95,6 +105,10 @@ impl Config {
                 source,
             }
         })?;
+        self.save(path)
+    }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
         let text = toml::to_string_pretty(self)
             .map_err(|error| CrmError::Serialization(error.to_string()))?;
         fs::write(path, text).map_err(|source| CrmError::Io {

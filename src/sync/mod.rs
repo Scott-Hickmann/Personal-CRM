@@ -1,5 +1,7 @@
 mod calls;
 mod contacts;
+mod gmail;
+mod gmail_message;
 mod imessage;
 mod whatsapp;
 
@@ -20,6 +22,7 @@ pub enum SyncTarget {
     Imessage,
     Whatsapp,
     Calls,
+    Gmail,
 }
 
 #[derive(Debug, Serialize)]
@@ -54,6 +57,11 @@ pub fn run(
     if matches!(target, SyncTarget::All | SyncTarget::Calls) {
         let transaction = crm.unchecked_transaction()?;
         reports.extend(calls::sync(config, &transaction)?);
+        transaction.commit()?;
+    }
+    if matches!(target, SyncTarget::All | SyncTarget::Gmail) && !config.gmail.accounts.is_empty() {
+        let transaction = crm.unchecked_transaction()?;
+        reports.extend(gmail::sync(config, &transaction)?);
         transaction.commit()?;
     }
     Ok(reports)

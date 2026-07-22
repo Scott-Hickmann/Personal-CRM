@@ -23,6 +23,10 @@ pub enum CrmError {
     IncompatibleSource(String),
     #[error("invalid query: {0}")]
     InvalidQuery(String),
+    #[error("authentication error: {0}")]
+    Authentication(String),
+    #[error("network error: {0}")]
+    Network(String),
     #[error("serialization error: {0}")]
     Serialization(String),
     #[error("unsupported platform: this CRM supports macOS only")]
@@ -37,6 +41,7 @@ impl CrmError {
             | Self::InvalidQuery(_)
             | Self::Serialization(_) => 2,
             Self::ConfigMissing(_) | Self::Io { .. } => 4,
+            Self::Authentication(_) | Self::Network(_) => 4,
             Self::UnsupportedPlatform => 5,
             Self::PersonNotFound(_) | Self::AmbiguousPerson(_) => 3,
             Self::IncompatibleSource(_) => 5,
@@ -55,6 +60,8 @@ impl CrmError {
             Self::AmbiguousPerson(_) => "ambiguous_person",
             Self::IncompatibleSource(_) => "incompatible_source",
             Self::InvalidQuery(_) => "invalid_query",
+            Self::Authentication(_) => "authentication_error",
+            Self::Network(_) => "network_error",
             Self::Serialization(_) => "serialization_error",
             Self::UnsupportedPlatform => "unsupported_platform",
         }

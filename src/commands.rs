@@ -43,6 +43,7 @@ pub(crate) fn run(format: Format, config: Option<PathBuf>, command: Command) -> 
         Command::Tag { command } => tag(format, config_path, command),
         Command::Sync { target } => sync_sources(format, config_path, target),
         Command::Query(args) => query_entities(format, config_path, args),
+        Command::Auth { command } => crate::auth_commands::run(format, config_path, command),
     }
 }
 

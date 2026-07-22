@@ -1,8 +1,10 @@
+mod auth_commands;
 mod cli;
 mod commands;
 mod config;
 mod db;
 mod error;
+mod gmail;
 mod output;
 mod query;
 mod repository;

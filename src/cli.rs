@@ -47,6 +47,30 @@ pub(crate) enum Command {
         target: SyncTarget,
     },
     Query(QueryArgs),
+    Auth {
+        #[command(subcommand)]
+        command: AuthCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum AuthCommand {
+    Gmail {
+        #[command(subcommand)]
+        command: GmailCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum GmailCommand {
+    Add {
+        #[arg(long)]
+        credentials: PathBuf,
+    },
+    List,
+    Remove {
+        account: String,
+    },
 }
 
 #[derive(Args)]
