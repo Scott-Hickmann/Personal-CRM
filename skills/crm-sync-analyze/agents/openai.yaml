@@ -1,0 +1,4 @@
+interface:
+  display_name: "CRM Sync and Analyze"
+  short_description: "Check, synchronize, and analyze the local personal CRM"
+  default_prompt: "Use $crm-sync-analyze to work with my local personal CRM."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "CRM Lookup"
+  short_description: "Read people and relationships from the local CRM"
+  default_prompt: "Use $crm-lookup to look up context in my personal CRM."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "CRM Update"
+  short_description: "Preview and apply local personal CRM updates"
+  default_prompt: "Use $crm-update to add this information to my personal CRM."
