@@ -7,7 +7,7 @@
 - macOS
 - Rust and Cargo
 - Full Disk Access for the terminal or Codex process when reading protected Apple and WhatsApp databases
-- Ollama with `qwen3:8b` and `embeddinggemma` for analysis
+- Ollama with `qwen3.5:9b` and `embeddinggemma` for analysis
 - A Google OAuth desktop client JSON file for each Gmail setup session
 
 No binary installation is required. Add this to `~/.zshrc`:

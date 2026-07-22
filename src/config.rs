@@ -55,7 +55,7 @@ impl Default for OllamaConfig {
     fn default() -> Self {
         Self {
             base_url: "http://127.0.0.1:11434".into(),
-            generation_model: "qwen3:8b".into(),
+            generation_model: "qwen3.5:9b".into(),
             embedding_model: "embeddinggemma".into(),
         }
     }
@@ -179,5 +179,6 @@ mod tests {
         assert_eq!(config.self_identity.name, "Scott Hickmann");
         assert_eq!(config.self_identity.emails, ["scott@example.com"]);
         assert_eq!(config.self_identity.phones, ["+1 555 123 4567"]);
+        assert_eq!(config.ollama.generation_model, "qwen3.5:9b");
     }
 }
