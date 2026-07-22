@@ -240,7 +240,7 @@ pub fn add_tag(
     )
 }
 
-fn upsert_identity(
+pub(crate) fn upsert_identity(
     connection: &Connection,
     person_id: &str,
     kind: &str,
@@ -257,7 +257,7 @@ fn upsert_identity(
     Ok(())
 }
 
-fn normalize_identity(kind: &str, value: &str) -> String {
+pub(crate) fn normalize_identity(kind: &str, value: &str) -> String {
     match kind {
         "phone" | "whatsapp" => value
             .chars()

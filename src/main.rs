@@ -1,10 +1,12 @@
 mod cli;
+mod commands;
 mod config;
 mod db;
 mod error;
 mod output;
 mod repository;
 mod source;
+mod sync;
 
 use clap::Parser;
 

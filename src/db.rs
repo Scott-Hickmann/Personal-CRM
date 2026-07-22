@@ -9,6 +9,7 @@ use crate::error::{CrmError, Result};
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, include_str!("../migrations/001_initial.sql")),
     (2, include_str!("../migrations/002_overlay.sql")),
+    (3, include_str!("../migrations/003_sync.sql")),
 ];
 
 pub fn open(path: &Path) -> Result<Connection> {
@@ -72,6 +73,6 @@ mod tests {
         let path = directory.path().join("crm.sqlite3");
         drop(open(&path).unwrap());
         let connection = open(&path).unwrap();
-        assert_eq!(schema_version(&connection).unwrap(), 2);
+        assert_eq!(schema_version(&connection).unwrap(), 3);
     }
 }

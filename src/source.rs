@@ -46,6 +46,10 @@ impl ReadOnlySource {
         }
     }
 
+    pub fn connection(&self) -> &Connection {
+        &self.connection
+    }
+
     pub fn schema_fingerprint(&self) -> Result<String> {
         let mut statement = self.connection.prepare(
             "SELECT type, name, COALESCE(sql, '') FROM sqlite_master ORDER BY type, name",
