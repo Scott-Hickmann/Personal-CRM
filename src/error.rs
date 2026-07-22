@@ -21,6 +21,8 @@ pub enum CrmError {
     AmbiguousPerson(String),
     #[error("source database is incompatible: {0}")]
     IncompatibleSource(String),
+    #[error("invalid query: {0}")]
+    InvalidQuery(String),
     #[error("serialization error: {0}")]
     Serialization(String),
     #[error("unsupported platform: this CRM supports macOS only")]
@@ -30,7 +32,10 @@ pub enum CrmError {
 impl CrmError {
     pub fn exit_code(&self) -> i32 {
         match self {
-            Self::ConfigExists(_) | Self::InvalidConfig(_) | Self::Serialization(_) => 2,
+            Self::ConfigExists(_)
+            | Self::InvalidConfig(_)
+            | Self::InvalidQuery(_)
+            | Self::Serialization(_) => 2,
             Self::ConfigMissing(_) | Self::Io { .. } => 4,
             Self::UnsupportedPlatform => 5,
             Self::PersonNotFound(_) | Self::AmbiguousPerson(_) => 3,
@@ -49,6 +54,7 @@ impl CrmError {
             Self::PersonNotFound(_) => "person_not_found",
             Self::AmbiguousPerson(_) => "ambiguous_person",
             Self::IncompatibleSource(_) => "incompatible_source",
+            Self::InvalidQuery(_) => "invalid_query",
             Self::Serialization(_) => "serialization_error",
             Self::UnsupportedPlatform => "unsupported_platform",
         }

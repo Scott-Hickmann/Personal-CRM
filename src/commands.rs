@@ -3,12 +3,14 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::cli::{
-    Command, ConfigCommand, FactCommand, InitArgs, NoteCommand, PersonCommand, TagCommand,
+    Command, ConfigCommand, FactCommand, InitArgs, NoteCommand, PersonCommand, QueryArgs,
+    TagCommand,
 };
 use crate::config::{self, Config};
 use crate::db;
 use crate::error::{CrmError, Result};
 use crate::output::{self, Format};
+use crate::query::{self, QueryOptions};
 use crate::repository;
 use crate::source::ReadOnlySource;
 use crate::sync::{self, SyncTarget};
@@ -40,6 +42,44 @@ pub(crate) fn run(format: Format, config: Option<PathBuf>, command: Command) -> 
         Command::Fact { command } => fact(format, config_path, command),
         Command::Tag { command } => tag(format, config_path, command),
         Command::Sync { target } => sync_sources(format, config_path, target),
+        Command::Query(args) => query_entities(format, config_path, args),
+    }
+}
+
+fn query_entities(format: Format, config_path: PathBuf, args: QueryArgs) -> Result<()> {
+    let connection = open_database(&config_path)?;
+    let result = query::execute(
+        &connection,
+        args.entity,
+        QueryOptions {
+            select: args.select.as_deref(),
+            filter: args.filter.as_deref(),
+            sort: args.sort.as_deref(),
+            group: args.group.as_deref(),
+            limit: args.limit,
+        },
+    )?;
+    let table = result
+        .rows
+        .iter()
+        .map(|row| {
+            result
+                .columns
+                .iter()
+                .map(|column| row.get(column).map(display_json).unwrap_or_default())
+                .collect::<Vec<_>>()
+                .join("\t")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    output::emit(format, "query", &result, table)
+}
+
+fn display_json(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => String::new(),
+        serde_json::Value::String(value) => value.clone(),
+        other => other.to_string(),
     }
 }
 

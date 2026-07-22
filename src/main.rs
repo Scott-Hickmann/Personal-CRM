@@ -4,6 +4,7 @@ mod config;
 mod db;
 mod error;
 mod output;
+mod query;
 mod repository;
 mod source;
 mod sync;

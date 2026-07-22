@@ -4,6 +4,7 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::error::Result;
 use crate::output::Format;
+use crate::query::Entity;
 use crate::sync::SyncTarget;
 
 #[derive(Parser)]
@@ -45,6 +46,23 @@ pub(crate) enum Command {
         #[arg(value_enum, default_value = "all")]
         target: SyncTarget,
     },
+    Query(QueryArgs),
+}
+
+#[derive(Args)]
+pub(crate) struct QueryArgs {
+    #[arg(value_enum)]
+    pub entity: Entity,
+    #[arg(long)]
+    pub select: Option<String>,
+    #[arg(long = "filter")]
+    pub filter: Option<String>,
+    #[arg(long)]
+    pub sort: Option<String>,
+    #[arg(long)]
+    pub group: Option<String>,
+    #[arg(long, default_value_t = 100)]
+    pub limit: u32,
 }
 
 #[derive(Subcommand)]
