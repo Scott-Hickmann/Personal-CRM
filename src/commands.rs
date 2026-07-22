@@ -43,6 +43,9 @@ pub(crate) fn run(format: Format, config: Option<PathBuf>, command: Command) -> 
         Command::Tag { command } => tag(format, config_path, command),
         Command::Sync { target } => sync_sources(format, config_path, target),
         Command::Query(args) => query_entities(format, config_path, args),
+        Command::Analyze(args) => crate::analytics_commands::analyze(format, config_path, args),
+        Command::Explain(args) => crate::analytics_commands::explain(format, config_path, args),
+        Command::Graph(args) => crate::analytics_commands::graph(format, config_path, args),
         Command::Auth { command } => crate::auth_commands::run(format, config_path, command),
     }
 }

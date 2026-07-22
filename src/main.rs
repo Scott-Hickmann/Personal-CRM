@@ -1,3 +1,5 @@
+mod analysis;
+mod analytics_commands;
 mod auth_commands;
 mod cli;
 mod commands;
@@ -5,9 +7,12 @@ mod config;
 mod db;
 mod error;
 mod gmail;
+mod graph;
+mod ollama;
 mod output;
 mod query;
 mod repository;
+mod scoring;
 mod source;
 mod sync;
 

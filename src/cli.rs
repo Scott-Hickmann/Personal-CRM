@@ -47,10 +47,26 @@ pub(crate) enum Command {
         target: SyncTarget,
     },
     Query(QueryArgs),
+    Analyze(AnalyzeArgs),
+    Explain(PersonReference),
+    Graph(GraphArgs),
     Auth {
         #[command(subcommand)]
         command: AuthCommand,
     },
+}
+
+#[derive(Args)]
+pub(crate) struct AnalyzeArgs {
+    #[arg(long, default_value_t = 20)]
+    pub limit: u32,
+}
+
+#[derive(Args)]
+pub(crate) struct GraphArgs {
+    pub person: Option<String>,
+    #[arg(long, default_value_t = 0.7)]
+    pub min_confidence: f64,
 }
 
 #[derive(Subcommand)]
