@@ -54,6 +54,32 @@ fn duplicate_identity_is_not_claimed_by_either_contact() {
 }
 
 #[test]
+fn only_absent_identity_collisions_are_removed_from_review() {
+    let directory = tempfile::tempdir().unwrap();
+    let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
+    review::enqueue(
+        &connection,
+        "identity_collision",
+        "stale@example.com",
+        "Identity stale@example.com belongs to multiple iCloud contacts",
+        serde_json::json!({"apple_contact_ids": ["apple-1", "apple-2"]}),
+    )
+    .unwrap();
+    let mut active = HashSet::new();
+    let conflicts = HashMap::from([(
+        "active@example.com".into(),
+        vec!["apple-3".into(), "apple-4".into()],
+    )]);
+
+    enqueue_collisions(&connection, &conflicts, &mut active).unwrap();
+    review::resolve_absent(&connection, "identity_collision", &active).unwrap();
+
+    let pending = review::pending(&connection).unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].subject_key, "active@example.com");
+}
+
+#[test]
 fn company_contacts_are_retired_and_suppressed_from_suggestions() {
     let directory = tempfile::tempdir().unwrap();
     let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();

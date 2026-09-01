@@ -34,7 +34,8 @@ pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncRepo
     refresh_company_exclusions(crm, &companies)?;
     let fingerprint = apple::schema_fingerprint(configured, container)?;
     let conflicts = duplicate_identities(&contacts);
-    enqueue_collisions(crm, &conflicts)?;
+    let mut active_collisions = HashSet::new();
+    enqueue_collisions(crm, &conflicts, &mut active_collisions)?;
 
     let seen: HashSet<_> = contacts.iter().map(|contact| contact.id.as_str()).collect();
     let mut imported = 0;
@@ -43,11 +44,13 @@ pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncRepo
             crm,
             contact,
             &conflicts,
+            &mut active_collisions,
             config.self_identity.apple_contact_id.as_deref(),
         )? {
             imported += 1;
         }
     }
+    review::resolve_absent(crm, "identity_collision", &active_collisions)?;
     retire_missing(crm, &seen)?;
     enqueue_migration_reviews(crm, &contacts)?;
     rebind_unresolved_participants(crm)?;
@@ -72,6 +75,7 @@ fn reconcile_contact(
     crm: &Connection,
     contact: &AppleContact,
     conflicts: &HashMap<String, Vec<String>>,
+    active_collisions: &mut HashSet<String>,
     self_apple_id: Option<&str>,
 ) -> Result<bool> {
     let existing: Option<String> = crm
@@ -120,6 +124,7 @@ fn reconcile_contact(
             continue;
         }
         if let Err(error) = repository::upsert_identity(crm, &person_id, kind, value, is_self) {
+            active_collisions.insert(normalized.clone());
             review::enqueue(
                 crm,
                 "identity_collision",
@@ -200,8 +205,13 @@ fn enqueue_migration_reviews(crm: &Connection, contacts: &[AppleContact]) -> Res
     Ok(())
 }
 
-fn enqueue_collisions(crm: &Connection, conflicts: &HashMap<String, Vec<String>>) -> Result<()> {
+fn enqueue_collisions(
+    crm: &Connection,
+    conflicts: &HashMap<String, Vec<String>>,
+    active_collisions: &mut HashSet<String>,
+) -> Result<()> {
     for (normalized, apple_ids) in conflicts {
+        active_collisions.insert(normalized.clone());
         review::enqueue(
             crm,
             "identity_collision",
