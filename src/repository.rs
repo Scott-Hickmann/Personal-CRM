@@ -142,7 +142,12 @@ pub fn get_person(connection: &Connection, reference: &str) -> Result<Person> {
     )?;
     person.identities = collect(
         connection,
-        "SELECT kind, value, is_self FROM identities WHERE person_id = ?1 AND active=1",
+        "SELECT kind, value, is_self FROM identities WHERE person_id=?1
+         AND (
+             active=1 OR EXISTS(
+                 SELECT 1 FROM people WHERE id=?1 AND lifecycle_state='retired'
+             )
+         )",
         &id,
         |row| {
             Ok(Identity {
@@ -405,5 +410,28 @@ mod tests {
             )
             .unwrap();
         assert_eq!(owner, "canonical");
+    }
+
+    #[test]
+    fn retired_person_show_includes_preserved_inactive_identities() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state)
+                 VALUES ('retired', 'Alex', 'apple-1', 'retired');
+                 INSERT INTO identities(
+                     id, person_id, kind, value, normalized_value, active
+                 ) VALUES (
+                     'identity', 'retired', 'email', 'alex@example.com',
+                     'alex@example.com', 0
+                 );",
+            )
+            .unwrap();
+
+        let person = get_person(&connection, "retired").unwrap();
+
+        assert_eq!(person.identities.len(), 1);
+        assert_eq!(person.identities[0].value, "alex@example.com");
     }
 }

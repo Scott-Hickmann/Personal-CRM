@@ -70,6 +70,7 @@ fn query_entities(format: Format, config_path: PathBuf, args: QueryArgs) -> Resu
         &connection,
         args.entity,
         QueryOptions {
+            include_retired: args.include_retired,
             select: args.select.as_deref(),
             filter: args.filter.as_deref(),
             sort: args.sort.as_deref(),

@@ -183,11 +183,15 @@ crm query people \
   --filter 'is_self = 0 and days_since_meaningful_interaction > 60d' \
   --sort=-days_since_meaningful_interaction
 
+crm query people --include-retired \
+  --select id,display_name,lifecycle_state \
+  --filter 'lifecycle_state = retired'
+
 crm explain "Alex"
 crm graph "Alex" --min-confidence 0.7
 ```
 
-The query language accepts allowlisted fields only, uses bound SQL parameters, and supports `and`, `or`, `not`, parentheses, comparisons, `contains`, `in`, `is null`, day/week durations, sorting, grouping, selection, and limits.
+People queries include active people by default; `--include-retired` makes retired records available for explicit filtering. The query language accepts allowlisted fields only, uses bound SQL parameters, and supports `and`, `or`, `not`, parentheses, comparisons, `contains`, `in`, `is null`, day/week durations, sorting, grouping, selection, and limits.
 
 `crm graph` emits a Mermaid diagram from inferred, confidence-filtered relationships. Unknown mentioned people remain unresolved; analysis never creates contacts automatically.
 

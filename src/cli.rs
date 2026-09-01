@@ -201,6 +201,8 @@ pub(crate) struct QueryArgs {
     #[arg(value_enum)]
     pub entity: Entity,
     #[arg(long)]
+    pub include_retired: bool,
+    #[arg(long)]
     pub select: Option<String>,
     #[arg(long = "filter")]
     pub filter: Option<String>,

@@ -25,6 +25,7 @@ pub struct QueryResult {
 }
 
 pub struct QueryOptions<'a> {
+    pub include_retired: bool,
     pub select: Option<&'a str>,
     pub filter: Option<&'a str>,
     pub sort: Option<&'a str>,
@@ -42,6 +43,11 @@ pub fn execute(
             "limit must be between 1 and 10000".into(),
         ));
     }
+    if options.include_retired && !matches!(entity, Entity::People) {
+        return Err(CrmError::InvalidQuery(
+            "--include-retired is only valid for people queries".into(),
+        ));
+    }
     let specification = specification(entity);
     let (select_sql, columns) = if let Some(group) = options.group {
         let field = resolve_field(specification, group)?;
@@ -52,7 +58,12 @@ pub fn execute(
     } else {
         select_fields(specification, options.select)?
     };
-    let mut sql = format!("SELECT {select_sql} FROM {}", specification.from);
+    let from = if options.include_retired {
+        "people p"
+    } else {
+        specification.from
+    };
+    let mut sql = format!("SELECT {select_sql} FROM {from}");
     let mut params = Vec::new();
     if let Some(expression) = options.filter {
         let (where_sql, where_params) =
@@ -282,3 +293,39 @@ const SOURCES: Specification = Specification {
         ("error", "s.error"),
     ],
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+
+    #[test]
+    fn retired_people_are_included_only_when_requested() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state)
+                 VALUES
+                     ('active', 'Active', 'apple-active', 'active'),
+                     ('retired', 'Retired', 'apple-retired', 'retired');",
+            )
+            .unwrap();
+        let options = |include_retired| QueryOptions {
+            include_retired,
+            select: Some("id,lifecycle_state"),
+            filter: None,
+            sort: Some("id"),
+            group: None,
+            limit: 100,
+        };
+
+        let active = execute(&connection, Entity::People, options(false)).unwrap();
+        let all = execute(&connection, Entity::People, options(true)).unwrap();
+
+        assert_eq!(active.rows.len(), 1);
+        assert_eq!(active.rows[0]["id"], "active");
+        assert_eq!(all.rows.len(), 2);
+        assert_eq!(all.rows[1]["id"], "retired");
+    }
+}
