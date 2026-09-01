@@ -77,6 +77,24 @@ crm tag add --person "Alex" --tag "climbing"
 
 Every mutation supports `--dry-run`. Partial names are accepted only when they resolve to exactly one person.
 
+## Match a face from Photos
+
+Match a local photo containing exactly one face against the named people stored by macOS Photos:
+
+```sh
+crm face match /path/to/photo.jpg
+```
+
+The command reads the System Photo Library database read-only, compares the query against up to three stored faceprints per named person, and ranks the closest results. Lower distance means greater facial similarity; this is not security-grade biometric identification. The query photo is not copied or retained, and nothing is uploaded or written to Photos.
+
+Full Disk Access may be required. If the library is outside the standard Pictures directory or more than one library is present, select it explicitly:
+
+```sh
+crm face match /path/to/photo.jpg --library "/path/to/Photos Library.photoslibrary"
+```
+
+Photos uses a private database schema and faceprint runtime, so the command validates both and stops if a macOS update makes either incompatible. Reference originals do not need to be downloaded from iCloud because matching uses the faceprints Photos already stores locally.
+
 ## Queries and relationship utilities
 
 Commands support table output by default and stable `--format json` or `--format jsonl` output for agents.

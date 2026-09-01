@@ -51,10 +51,28 @@ pub(crate) enum Command {
     Analyze(AnalyzeArgs),
     Explain(PersonReference),
     Graph(GraphArgs),
+    Face {
+        #[command(subcommand)]
+        command: FaceCommand,
+    },
     Auth {
         #[command(subcommand)]
         command: AuthCommand,
     },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum FaceCommand {
+    Match(FaceMatchArgs),
+}
+
+#[derive(Args)]
+pub(crate) struct FaceMatchArgs {
+    pub photo: PathBuf,
+    #[arg(long)]
+    pub library: Option<PathBuf>,
+    #[arg(long, default_value_t = 5, value_parser = clap::value_parser!(u32).range(1..=100))]
+    pub limit: u32,
 }
 
 #[derive(Args)]

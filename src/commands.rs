@@ -47,6 +47,7 @@ pub(crate) fn run(format: Format, config: Option<PathBuf>, command: Command) -> 
         Command::Analyze(args) => crate::analytics_commands::analyze(format, config_path, args),
         Command::Explain(args) => crate::analytics_commands::explain(format, config_path, args),
         Command::Graph(args) => crate::analytics_commands::graph(format, config_path, args),
+        Command::Face { command } => crate::face_commands::run(format, command),
         Command::Auth { command } => crate::auth_commands::run(format, config_path, command),
     }
 }
