@@ -233,6 +233,7 @@ mod tests {
     fn contact() -> AppleContact {
         AppleContact {
             id: "apple-1".into(),
+            is_company: false,
             name_prefix: String::new(),
             given_name: "Alex".into(),
             middle_name: String::new(),

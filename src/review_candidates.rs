@@ -183,6 +183,9 @@ pub(crate) fn identity_belongs_to_icloud_contact(
                  SELECT 1 FROM identities i JOIN people p ON p.id=i.person_id
                  WHERE i.normalized_value=?1 AND i.active=1
                    AND p.lifecycle_state='active' AND p.apple_contact_id IS NOT NULL
+                 UNION ALL
+                 SELECT 1 FROM excluded_icloud_identities
+                 WHERE normalized_value=?1
              )",
             [normalized],
             |row| row.get(0),

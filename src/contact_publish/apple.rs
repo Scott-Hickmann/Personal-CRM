@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 use crate::error::{CrmError, Result};
 use crate::source::ReadOnlySource;
 
+const SHOW_AS_MASK: i64 = 7;
+const SHOW_AS_COMPANY: i64 = 1;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppleContainer {
     pub id: String,
@@ -26,6 +29,7 @@ pub fn is_icloud(container: &AppleContainer) -> bool {
 #[serde(rename_all = "camelCase")]
 pub struct AppleContact {
     pub id: String,
+    pub is_company: bool,
     pub name_prefix: String,
     pub given_name: String,
     pub middle_name: String,
@@ -116,6 +120,7 @@ pub fn contacts(configured: &Path, container_id: &str) -> Result<Vec<AppleContac
         &[
             "Z_PK",
             "ZUNIQUEID",
+            "ZDISPLAYFLAGS",
             "ZTITLE",
             "ZFIRSTNAME",
             "ZMIDDLENAME",
@@ -137,7 +142,8 @@ pub fn contacts(configured: &Path, container_id: &str) -> Result<Vec<AppleContac
     )?;
     let connection = source.connection();
     let mut statement = connection.prepare(
-        "SELECT Z_PK, ZUNIQUEID, COALESCE(ZTITLE, ''), COALESCE(ZFIRSTNAME, ''),
+        "SELECT Z_PK, ZUNIQUEID, COALESCE(ZDISPLAYFLAGS, 0),
+                COALESCE(ZTITLE, ''), COALESCE(ZFIRSTNAME, ''),
                 COALESCE(ZMIDDLENAME, ''), COALESCE(ZLASTNAME, ''),
                 COALESCE(ZSUFFIX, ''), COALESCE(ZNICKNAME, ''),
                 COALESCE(ZORGANIZATION, ''), COALESCE(ZDEPARTMENT, ''),
@@ -150,15 +156,16 @@ pub fn contacts(configured: &Path, container_id: &str) -> Result<Vec<AppleContac
                 row.get::<_, i64>(0)?,
                 AppleContact {
                     id: row.get(1)?,
-                    name_prefix: row.get(2)?,
-                    given_name: row.get(3)?,
-                    middle_name: row.get(4)?,
-                    family_name: row.get(5)?,
-                    name_suffix: row.get(6)?,
-                    nickname: row.get(7)?,
-                    organization: row.get(8)?,
-                    department: row.get(9)?,
-                    job_title: row.get(10)?,
+                    is_company: row.get::<_, i64>(2)? & SHOW_AS_MASK == SHOW_AS_COMPANY,
+                    name_prefix: row.get(3)?,
+                    given_name: row.get(4)?,
+                    middle_name: row.get(5)?,
+                    family_name: row.get(6)?,
+                    name_suffix: row.get(7)?,
+                    nickname: row.get(8)?,
+                    organization: row.get(9)?,
+                    department: row.get(10)?,
+                    job_title: row.get(11)?,
                     emails: Vec::new(),
                     phones: Vec::new(),
                 },
@@ -288,82 +295,4 @@ fn account_metadata() -> Result<HashMap<String, AccountMetadata>> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn recognizes_icloud_carddav_container() {
-        let container = AppleContainer {
-            id: "icloud-account".into(),
-            name: "iCloud".into(),
-            kind: "com.apple.account.CardDAV".into(),
-        };
-
-        assert!(is_icloud(&container));
-    }
-
-    #[test]
-    fn rejects_non_icloud_contact_containers() {
-        let local = AppleContainer {
-            id: "local".into(),
-            name: "On My Mac".into(),
-            kind: "local".into(),
-        };
-        let other_carddav = AppleContainer {
-            id: "other-account".into(),
-            name: "Fastmail".into(),
-            kind: "com.apple.account.CardDAV".into(),
-        };
-
-        assert!(!is_icloud(&local));
-        assert!(!is_icloud(&other_carddav));
-    }
-
-    #[test]
-    fn recognizes_icloud_account_type() {
-        let container = AppleContainer {
-            id: "icloud-account".into(),
-            name: "Contacts".into(),
-            kind: "com.apple.account.iCloud".into(),
-        };
-
-        assert!(is_icloud(&container));
-    }
-
-    #[test]
-    fn exports_labeled_contact_fields_from_read_only_database() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("AddressBook-v22.abcddb");
-        let connection = rusqlite::Connection::open(&path).unwrap();
-        connection
-            .execute_batch(
-                "CREATE TABLE ZABCDRECORD (
-                    Z_PK INTEGER PRIMARY KEY, ZUNIQUEID TEXT, ZTITLE TEXT,
-                    ZFIRSTNAME TEXT, ZMIDDLENAME TEXT, ZLASTNAME TEXT, ZSUFFIX TEXT,
-                    ZNICKNAME TEXT, ZORGANIZATION TEXT, ZDEPARTMENT TEXT, ZJOBTITLE TEXT
-                 );
-                 CREATE TABLE ZABCDEMAILADDRESS (
-                    Z_PK INTEGER PRIMARY KEY, ZOWNER INTEGER, ZADDRESS TEXT,
-                    ZLABEL TEXT, ZORDERINGINDEX INTEGER
-                 );
-                 CREATE TABLE ZABCDPHONENUMBER (
-                    Z_PK INTEGER PRIMARY KEY, ZOWNER INTEGER, ZFULLNUMBER TEXT,
-                    ZLABEL TEXT, ZORDERINGINDEX INTEGER
-                 );
-                 INSERT INTO ZABCDRECORD VALUES
-                    (1, 'apple-1', '', 'Alex', '', 'Example', '', '', 'Example Inc', 'R&D', 'Engineer');
-                 INSERT INTO ZABCDEMAILADDRESS VALUES
-                    (1, 1, 'alex@example.com', '$!<Work>!$', 0);
-                 INSERT INTO ZABCDPHONENUMBER VALUES
-                    (1, 1, '555-0100', '$!<Mobile>!$', 0);",
-            )
-            .unwrap();
-        drop(connection);
-
-        let exported = contacts(&path, "local").unwrap();
-        assert_eq!(exported.len(), 1);
-        assert_eq!(exported[0].id, "apple-1");
-        assert_eq!(exported[0].emails[0].label.as_deref(), Some("$!<Work>!$"));
-        assert_eq!(exported[0].phones[0].value, "555-0100");
-    }
-}
+mod tests;

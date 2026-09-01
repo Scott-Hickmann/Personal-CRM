@@ -30,7 +30,8 @@ pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncRepo
             "the authoritative contact container is not an iCloud account".into(),
         ));
     }
-    let contacts = apple::contacts(configured, container)?;
+    let (contacts, companies) = partition_contacts(apple::contacts(configured, container)?);
+    refresh_company_exclusions(crm, &companies)?;
     let fingerprint = apple::schema_fingerprint(configured, container)?;
     let conflicts = duplicate_identities(&contacts);
     enqueue_collisions(crm, &conflicts)?;
@@ -221,6 +222,31 @@ fn contact_identities(contact: &AppleContact) -> impl Iterator<Item = (&'static 
         )
 }
 
+fn partition_contacts(contacts: Vec<AppleContact>) -> (Vec<AppleContact>, Vec<AppleContact>) {
+    contacts
+        .into_iter()
+        .partition(|contact| !contact.is_company)
+}
+
+fn refresh_company_exclusions(crm: &Connection, companies: &[AppleContact]) -> Result<()> {
+    crm.execute("DELETE FROM excluded_icloud_identities", [])?;
+    for contact in companies {
+        for (kind, value) in contact_identities(contact) {
+            crm.execute(
+                "INSERT OR IGNORE INTO excluded_icloud_identities(
+                     apple_contact_id, kind, normalized_value
+                 ) VALUES (?1, ?2, ?3)",
+                params![
+                    contact.id,
+                    kind,
+                    repository::normalize_identity(kind, value)
+                ],
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn duplicate_identities(contacts: &[AppleContact]) -> HashMap<String, Vec<String>> {
     let mut owners: HashMap<String, Vec<String>> = HashMap::new();
     for contact in contacts {
@@ -257,79 +283,4 @@ fn display_name(contact: &AppleContact) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::db;
-
-    #[test]
-    fn retiring_contact_preserves_history_and_overlays() {
-        let directory = tempfile::tempdir().unwrap();
-        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
-        connection
-            .execute_batch(
-                "INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state)
-                 VALUES ('person', 'Alex', 'apple-1', 'active');
-                 INSERT INTO notes(id, person_id, body) VALUES ('note', 'person', 'keep me');
-                 INSERT INTO identities(id, person_id, kind, value, normalized_value, active)
-             VALUES ('identity', 'person', 'email', 'alex@example.com', 'alex@example.com', 1);",
-            )
-            .unwrap();
-
-        retire_missing(&connection, &HashSet::new()).unwrap();
-
-        let state: String = connection
-            .query_row(
-                "SELECT lifecycle_state FROM people WHERE id='person'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let notes: i64 = connection
-            .query_row(
-                "SELECT COUNT(*) FROM notes WHERE person_id='person'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let identity_active: bool = connection
-            .query_row(
-                "SELECT active FROM identities WHERE id='identity'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(state, "retired");
-        assert_eq!(notes, 1);
-        assert!(!identity_active);
-    }
-
-    #[test]
-    fn duplicate_identity_is_not_claimed_by_either_contact() {
-        let mut first = sample_contact("apple-1");
-        let mut second = sample_contact("apple-2");
-        first.emails[0].value = "same@example.com".into();
-        second.emails[0].value = "same@example.com".into();
-        let duplicates = duplicate_identities(&[first, second]);
-        assert_eq!(duplicates["same@example.com"], ["apple-1", "apple-2"]);
-    }
-
-    fn sample_contact(id: &str) -> AppleContact {
-        AppleContact {
-            id: id.into(),
-            name_prefix: String::new(),
-            given_name: "Alex".into(),
-            middle_name: String::new(),
-            family_name: "Example".into(),
-            name_suffix: String::new(),
-            nickname: String::new(),
-            emails: vec![apple::LabeledValue {
-                label: None,
-                value: "alex@example.com".into(),
-            }],
-            phones: Vec::new(),
-            organization: String::new(),
-            department: String::new(),
-            job_title: String::new(),
-        }
-    }
-}
+mod tests;
