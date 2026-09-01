@@ -323,3 +323,21 @@ where
         .query_map([id], map)?
         .collect::<std::result::Result<_, _>>()?)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_observed_phone_and_whatsapp_identities() {
+        assert_eq!(normalize_observed_identity("+1 (555) 0100"), "15550100");
+        assert_eq!(
+            normalize_observed_identity("15550100@s.whatsapp.net"),
+            "15550100"
+        );
+        assert_eq!(
+            normalize_observed_identity("Alex@Example.com"),
+            "alex@example.com"
+        );
+    }
+}

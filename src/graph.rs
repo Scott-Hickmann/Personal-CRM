@@ -49,8 +49,8 @@ pub fn build(
     let base = "SELECT r.source_person_id, source.display_name, r.target_person_id,
                 target.display_name, r.relationship_type, r.confidence
                 FROM relationships r
-                JOIN people source ON source.id=r.source_person_id
-                JOIN people target ON target.id=r.target_person_id";
+                JOIN people source ON source.id=r.source_person_id AND source.lifecycle_state='active'
+                JOIN people target ON target.id=r.target_person_id AND target.lifecycle_state='active'";
     let rows = if let Some(person_id) = person_id {
         collect(
             connection,

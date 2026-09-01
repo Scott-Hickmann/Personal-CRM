@@ -60,14 +60,19 @@ fn configure(format: Format, config_path: PathBuf, args: ContactsConfigureArgs) 
         }
     }
     let containers = apple::containers(contacts_path(&config)?)?;
-    if !containers
+    let selected = containers
         .iter()
-        .any(|item| item.id == args.source_container)
-    {
+        .find(|item| item.id == args.source_container);
+    if selected.is_none() {
         return Err(CrmError::Contacts(format!(
             "contact container {} was not found",
             args.source_container
         )));
+    }
+    if !selected.unwrap().kind.to_lowercase().contains("icloud") {
+        return Err(CrmError::Contacts(
+            "the authoritative contact container must be an iCloud account".into(),
+        ));
     }
     let mut domains: Vec<_> = args
         .work_domains
@@ -103,7 +108,7 @@ fn publish_service(
     config_path: &Path,
     apply: bool,
 ) -> Result<contact_publish::reconcile::PublishReport> {
-    let config = Config::load(&config_path)?;
+    let config = Config::load(config_path)?;
     let publish = &config.contact_publish;
     let container = publish
         .source_container

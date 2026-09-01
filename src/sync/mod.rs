@@ -15,9 +15,8 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::source::ReadOnlySource;
 
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy)]
 pub enum SyncTarget {
-    All,
     Contacts,
     Imessage,
     Whatsapp,
@@ -39,27 +38,27 @@ pub fn run(
     crm: &Connection,
 ) -> Result<Vec<SyncReport>> {
     let mut reports = Vec::new();
-    if matches!(target, SyncTarget::All | SyncTarget::Contacts) {
+    if matches!(target, SyncTarget::Contacts) {
         let transaction = crm.unchecked_transaction()?;
         reports.push(contacts::sync(config, &transaction)?);
         transaction.commit()?;
     }
-    if matches!(target, SyncTarget::All | SyncTarget::Imessage) {
+    if matches!(target, SyncTarget::Imessage) {
         let transaction = crm.unchecked_transaction()?;
         reports.push(imessage::sync(config, &transaction)?);
         transaction.commit()?;
     }
-    if matches!(target, SyncTarget::All | SyncTarget::Whatsapp) {
+    if matches!(target, SyncTarget::Whatsapp) {
         let transaction = crm.unchecked_transaction()?;
         reports.push(whatsapp::sync(config, &transaction)?);
         transaction.commit()?;
     }
-    if matches!(target, SyncTarget::All | SyncTarget::Calls) {
+    if matches!(target, SyncTarget::Calls) {
         let transaction = crm.unchecked_transaction()?;
         reports.extend(calls::sync(config, &transaction)?);
         transaction.commit()?;
     }
-    if matches!(target, SyncTarget::All | SyncTarget::Gmail) && !config.gmail.accounts.is_empty() {
+    if matches!(target, SyncTarget::Gmail) && !config.gmail.accounts.is_empty() {
         let transaction = crm.unchecked_transaction()?;
         reports.extend(gmail::sync(config, &transaction)?);
         transaction.commit()?;

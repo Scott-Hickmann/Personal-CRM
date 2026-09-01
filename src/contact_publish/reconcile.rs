@@ -42,6 +42,7 @@ pub fn run(
     let mirrors = state::list(connection)?;
     let mut clients = HashMap::new();
     let mut remote = HashMap::new();
+    let mut duplicate_managed = HashMap::new();
     for account in accounts {
         let account_credentials = credentials.get(account).ok_or_else(|| {
             CrmError::Contacts(format!("missing OAuth credentials for {account}"))
@@ -49,11 +50,23 @@ pub fn run(
         let client = Client::for_account(account_credentials, account)?;
         let mut people = client.list()?;
         enqueue_unmanaged_candidates(connection, account, &people)?;
-        remove_duplicate_managed(connection, account, &mut people)?;
+        duplicate_managed.insert(account.clone(), remove_duplicate_managed(&mut people));
         remote.insert(account.clone(), people);
         clients.insert(account.clone(), client);
     }
-    let actions = plan::build(accounts, desired, mirrors, remote)?;
+    let mut actions = plan::build(accounts, desired, mirrors, remote)?;
+    for action in &mut actions {
+        if duplicate_managed
+            .get(&action.account)
+            .is_some_and(|ids| ids.contains(&action.apple_id))
+        {
+            action.kind = ActionKind::Collision;
+        }
+    }
+    let delete_subjects = action_subjects(&actions, ActionKind::Delete);
+    let collision_subjects = action_subjects(&actions, ActionKind::Collision);
+    review::resolve_absent(connection, "google_delete", &delete_subjects)?;
+    review::resolve_absent(connection, "google_collision", &collision_subjects)?;
     if apply {
         apply_actions(connection, &clients, &actions)?;
     }
@@ -175,12 +188,9 @@ fn display_name(name: &crate::google_contacts::Name) -> String {
         .to_owned()
 }
 
-fn remove_duplicate_managed(
-    connection: &Connection,
-    account: &str,
-    people: &mut Vec<Person>,
-) -> Result<()> {
+fn remove_duplicate_managed(people: &mut Vec<Person>) -> std::collections::HashSet<String> {
     let mut seen = std::collections::HashSet::new();
+    let mut duplicates = std::collections::HashSet::new();
     let mut kept = Vec::with_capacity(people.len());
     for person in people.drain(..) {
         let Some(apple_id) = owner_id(&person) else {
@@ -190,17 +200,22 @@ fn remove_duplicate_managed(
         if seen.insert(apple_id.to_owned()) {
             kept.push(person);
         } else {
-            review::enqueue(
-                connection,
-                "google_collision",
-                &format!("duplicate:{account}:{apple_id}"),
-                &format!("Google has duplicate managed contacts for {apple_id} in {account}"),
-                serde_json::json!({"account": account, "apple_contact_id": apple_id}),
-            )?;
+            duplicates.insert(apple_id.to_owned());
         }
     }
     *people = kept;
-    Ok(())
+    duplicates
+}
+
+fn action_subjects(
+    actions: &[PlannedAction],
+    kind: ActionKind,
+) -> std::collections::HashSet<String> {
+    actions
+        .iter()
+        .filter(|action| action.kind == kind)
+        .map(|action| format!("{}:{}", action.account, action.apple_id))
+        .collect()
 }
 
 pub fn delete_managed(
@@ -279,4 +294,31 @@ fn report(actions: Vec<PlannedAction>, applied: bool) -> PublishReport {
 
 fn count(actions: &[PlannedAction], kind: ActionKind) -> usize {
     actions.iter().filter(|action| action.kind == kind).count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+
+    #[test]
+    fn destructive_google_action_becomes_review_item() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
+        let action = PlannedAction {
+            kind: ActionKind::Delete,
+            desired: None,
+            remote: Some(Person {
+                resource_name: Some("people/google-1".into()),
+                ..Person::default()
+            }),
+            apple_id: "apple-1".into(),
+            account: "personal@example.com".into(),
+        };
+        enqueue_delete(&connection, &action).unwrap();
+        let items = review::pending(&connection).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].kind, "google_delete");
+        assert_eq!(items[0].details["google_resource_name"], "people/google-1");
+    }
 }

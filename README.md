@@ -1,6 +1,6 @@
 # Personal CRM
 
-`crm` is a private, macOS-only command-line CRM. It imports communication metadata and available text into its own SQLite database, keeps source systems read-only, and uses local Ollama models to summarize interactions and infer relationship context.
+`crm` is a private, macOS-only personal CRM with a launchd-managed background daemon. One selected iCloud Contacts container is the identity source of truth: every active CRM person maps to exactly one iCloud contact, while communication sources contribute interactions and suggestions without creating people. Local Ollama models summarize interactions and infer relationship context.
 
 ## Requirements
 
@@ -49,11 +49,11 @@ crm auth gmail remove account@example.com
 
 Refresh tokens are stored in macOS Keychain, not the configuration file. Gmail access uses the read-only scope and GET requests only. Sync excludes Spam and Trash. Deterministic bulk/automated email is reduced to metadata; local analysis can remove retained bodies it classifies as non-personal. All configured self email addresses are treated equally, including work and personal addresses.
 
-## Publish iCloud contacts to Google
+## Configure authoritative contacts and Google mirrors
 
-Contact publishing is separate from `crm sync contacts`. The existing sync command imports Apple Contacts into the local CRM; publishing reads one selected iCloud container and maintains filtered replicas in personal Google Contacts and Google Workspace. iCloud remains the source of truth.
+The selected iCloud container defines every active CRM person. Personal Google Contacts receives every usable iCloud contact, including phone-only contacts. Google Workspace receives only contacts with a work-labeled email or an email in a configured work domain.
 
-List the available Apple contact containers. This reads the same protected, local databases as `crm sync contacts`, so the terminal or Codex process needs Full Disk Access:
+List the available Apple contact containers. This reads the same protected local databases as `crm run contacts`, so the terminal or Codex process needs Full Disk Access:
 
 ```sh
 crm contacts containers
@@ -77,38 +77,48 @@ crm contacts configure \
   --work-domain "example.com"
 ```
 
-Preview every proposed action before applying it:
+Run the first reconciliation and review existing CRM-only people before starting the daemon:
 
 ```sh
-crm contacts publish
-crm contacts publish --apply
-crm contacts status
+crm run contacts
+crm review
+crm review REVIEW-ID --link-icloud ICLOUD-CONTACT-ID
+crm review REVIEW-ID --approve
 ```
 
-Contacts without email addresses remain only in iCloud. Every contact with an email is published to the personal account with its names, emails, phone numbers, and organization fields. A contact with an Apple `work` email label or configured work domain is also published to Workspace, limited to its work emails, work-labeled phone numbers, and organization fields.
+`--link-icloud` links a migration record to an existing iCloud contact. Approving a migration or contact-candidate review creates a contact in the selected iCloud container and then reconciles it into CRM. These are explicit, manual source writes and require macOS Contacts permission.
 
-Published Google contacts carry a private ownership marker. The command never modifies an unmarked Google contact merely because its email matches; it reports a collision instead. Google edits to managed fields are replaced by the iCloud values, Google deletions are recreated, and contacts that stop qualifying are deleted only when the tool previously managed them. Applying a large deletion requires `--allow-large-delete` after reviewing the preview.
+Published Google contacts carry a private ownership marker. The daemon automatically creates, updates, and recreates managed replicas. It never modifies an unmarked Google contact merely because an identity matches. Collisions and proposed deletions enter `crm review` and require explicit approval.
 
-## Synchronize and analyze
+## Run the daemon
 
 ```sh
-crm sync all
-crm sync contacts
-crm sync imessage
-crm sync whatsapp
-crm sync calls
-crm sync gmail
-crm analyze --limit 20
+crm start
+crm status
+crm review
+crm stop
 ```
 
-`sync all` imports Contacts, iMessage/SMS/MMS, WhatsApp messages, Apple/FaceTime calls, WhatsApp calls, and configured Gmail accounts. Repeated syncs are incremental where the source provides a cursor and reconcile deleted records into local tombstones.
+The daemon watches the selected iCloud Contacts database, iMessage, WhatsApp, and call-history databases with a short debounce. It polls Gmail history every minute and reconciles Photos periodically. New interactions trigger bounded, debounced Ollama analysis followed by deterministic scoring. Jobs are coalesced in SQLite, survive restarts, and retry failures.
+
+Manual recovery uses one command surface:
+
+```sh
+crm run contacts
+crm run communications
+crm run gmail
+crm run analysis
+crm run scoring
+crm run photos
+crm run google-publish
+crm run suggestions
+```
 
 Analysis sends bounded batches only to the configured local Ollama server. The editable prompt and response schema are in [`prompts/`](prompts/). There is intentionally no remote or alternate-model fallback: analysis fails when Ollama or a configured model is unavailable.
 
 ## People and manual information
 
 ```sh
-crm person add --name "Alex Example"
 crm person show "Alex"
 crm history "Alex" --channel whatsapp --limit 50
 crm note add --person "Alex" --text "Met through Sam"
@@ -116,7 +126,7 @@ crm fact set --person "Alex" --key "birthday" --value "May 4"
 crm tag add --person "Alex" --tag "climbing"
 ```
 
-Every mutation supports `--dry-run`. Partial names are accepted only when they resolve to exactly one person.
+People cannot be created directly in CRM. Unresolved Google and communication identities become contact candidates in `crm review`; approval creates the iCloud contact first. Notes, facts, and tags support `--dry-run`. Partial names are accepted only when they resolve to exactly one active or retired person.
 
 ## Match a face from Photos
 
@@ -193,17 +203,17 @@ Use `crm explain PERSON` to see the components for one person. Inferred relation
 
 ## Source safety
 
-Local source SQLite databases are opened with SQLite's read-only flag, `PRAGMA query_only`, and an authorizer that rejects inserts, updates, deletes, schema changes, writable pragmas, and attached databases. Schema fingerprints and required columns are checked before import. Gmail is read with a read-only OAuth scope. The CRM never sends messages or writes to Apple Contacts, Gmail messages, iMessage, WhatsApp, or call history. `crm contacts publish --apply` is the sole workflow that writes to an external contact store, and it writes only tool-managed Google Contacts.
+Local source SQLite databases are opened with SQLite's read-only flag, `PRAGMA query_only`, and an authorizer that rejects inserts, updates, deletes, schema changes, writable pragmas, and attached databases. Schema fingerprints and required columns are checked before import. Gmail is read with a read-only OAuth scope. The CRM never sends messages or writes to Gmail messages, iMessage, WhatsApp, or call history.
 
-Outside that explicit publishing workflow, only the CRM-owned SQLite database, configuration file, macOS Keychain token entries, and user-approved Photos imports are mutated.
+External writes are limited to automatic non-destructive updates of tool-managed Google contacts, explicitly approved Google deletions, explicitly approved iCloud contact creation, and user-approved Photos imports. Source-deleted message bodies and locally classified non-personal email bodies may still be cleared for privacy; their interaction metadata and tombstones remain.
 
 ## Codex skills
 
 The repository contains three skills:
 
 - `crm-lookup`: read people, history, dormant/frequency views, scores, and connection charts.
-- `crm-update`: dry-run and apply explicit people, note, fact, and tag mutations.
-- `crm-sync-analyze`: health-check, synchronize, and run bounded local analysis; suitable for a user-configured daily Codex automation.
+- `crm-update`: dry-run and apply notes, facts, tags, and explicitly selected contact reviews.
+- `crm-sync-analyze`: inspect daemon health or manually run recovery jobs.
 
 They are linked into `~/.agents/skills` during project setup. The skills invoke Cargo with the absolute manifest path, so they do not depend on the interactive zsh alias.
 
@@ -212,3 +222,4 @@ They are linked into `~/.agents/skills` during project setup. The skills invoke 
 - iMessage text stored only in Apple's archived `attributedBody` format is not decoded; standard text is imported.
 - Source schemas are private implementation details of macOS and WhatsApp. `crm doctor` stops on an incompatible schema rather than guessing.
 - Identity merging is exact by normalized email or phone. Ambiguous people are surfaced rather than automatically merged.
+- Deleted iCloud contacts become retained, inactive CRM people. Their Google deletions require review.

@@ -217,7 +217,8 @@ fn source_people(connection: &Connection, interaction_id: &str) -> Result<Vec<St
 fn resolve_exact_person(connection: &Connection, name: &str) -> Result<Option<String>> {
     connection
         .query_row(
-            "SELECT id FROM people WHERE display_name=?1 COLLATE NOCASE LIMIT 1",
+            "SELECT id FROM people WHERE lifecycle_state='active'
+             AND display_name=?1 COLLATE NOCASE LIMIT 1",
             [name.trim()],
             |row| row.get(0),
         )

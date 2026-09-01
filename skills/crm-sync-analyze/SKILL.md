@@ -1,44 +1,42 @@
 ---
 name: crm-sync-analyze
-description: Diagnose, synchronize, and locally analyze the personal CRM. Use for manual refreshes and scheduled Codex automations that should import macOS Contacts, iMessage, WhatsApp, call history, and configured Gmail accounts, then update summaries, mentions, inferred relationships, embeddings, closeness tiers, and activity states.
+description: Diagnose or manually refresh the daemon-managed personal CRM. Use when checking daemon health, retrying a failed source job, or explicitly refreshing iCloud Contacts, communications, Gmail, local analysis, scores, Photos, or Google mirrors.
 ---
 
 # CRM Sync and Analyze
 
-Run a deterministic health-check, synchronization, and local Ollama analysis workflow. Source adapters perform real reads but must never write to Contacts, Gmail, iMessage, WhatsApp, or call-history stores.
+The launchd-managed CRM daemon normally handles synchronization and analysis. Use this skill for health checks and explicit recovery. iCloud Contacts is authoritative; communication sources only contribute interactions and contact suggestions.
 
 ## Workflow
 
-1. Check configuration, database migrations, macOS source paths, permissions, and source schemas:
+1. Inspect daemon, job, review, and source status:
 
 ```sh
-cargo run --quiet --manifest-path /Users/scotthickmann/GitHub/Personal-CRM/Cargo.toml -- --format json doctor
+cargo run --quiet --manifest-path /Users/scotthickmann/GitHub/Personal-CRM/Cargo.toml -- --format json status
 ```
 
-2. Stop and report the exact failing check if `doctor` fails. Full Disk Access may be required for protected macOS databases.
-3. Synchronize every configured source:
+2. Use `doctor` only when paths, permissions, or source schemas may be broken.
+3. Run only the recovery jobs needed for the request. A complete refresh is:
 
 ```sh
-cargo run --quiet --manifest-path /Users/scotthickmann/GitHub/Personal-CRM/Cargo.toml -- --format json sync all
+cargo run --quiet --manifest-path /Users/scotthickmann/GitHub/Personal-CRM/Cargo.toml -- --format json run contacts
+cargo run --quiet --manifest-path /Users/scotthickmann/GitHub/Personal-CRM/Cargo.toml -- --format json run communications
+cargo run --quiet --manifest-path /Users/scotthickmann/GitHub/Personal-CRM/Cargo.toml -- --format json run gmail
+cargo run --quiet --manifest-path /Users/scotthickmann/GitHub/Personal-CRM/Cargo.toml -- --format json run analysis
+cargo run --quiet --manifest-path /Users/scotthickmann/GitHub/Personal-CRM/Cargo.toml -- --format json run scoring
+cargo run --quiet --manifest-path /Users/scotthickmann/GitHub/Personal-CRM/Cargo.toml -- --format json run google-publish
 ```
 
-4. Run one bounded local analysis batch:
-
-```sh
-cargo run --quiet --manifest-path /Users/scotthickmann/GitHub/Personal-CRM/Cargo.toml -- --format json analyze --limit 20
-```
-
-5. Report per-source imported/deleted counts and analysis counts. A zero count is a valid no-change result.
-
-For scheduled automation, repeat analysis batches only when explicitly requested by the automation. Do not loop indefinitely: stop when `selected` is zero or at the automation's declared batch limit.
+4. Run `crm review` after contact reconciliation. Never approve migration links, contact creation, Google deletions, or collisions unless the user explicitly requested that exact review action.
+5. Report completed and failed jobs plus pending reviews. A no-change result is valid.
 
 ## Targeted synchronization
 
-Use `sync contacts`, `sync imessage`, `sync whatsapp`, `sync calls`, or `sync gmail` only when the user names that source. Gmail sync is skipped when no Gmail accounts are configured.
+Use `run contacts`, `run communications`, `run gmail`, `run analysis`, `run scoring`, `run photos`, `run google-publish`, or `run suggestions`. Prefer `crm start` over creating a scheduled Codex automation.
 
 ## Failure handling
 
-- OAuth setup is interactive and out of scope for scheduled runs. Report that `crm auth gmail add --credentials PATH` must be run manually.
+- OAuth setup and `crm start` are interactive setup operations; do not perform them unless requested.
 - Analysis intentionally fails if Ollama is unavailable or either configured model is missing. Do not switch models, download models, or fall back to a remote service.
 - Do not weaken source read-only protections or bypass schema checks.
-- Never send messages or email, modify source data, or create account credentials.
+- Never send messages or email, modify communication sources, create account credentials, or approve a review implicitly.

@@ -21,6 +21,15 @@ pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncRepo
         .ok_or_else(|| {
             CrmError::Contacts("select the authoritative iCloud container first".into())
         })?;
+    let selected = apple::containers(configured)?
+        .into_iter()
+        .find(|item| item.id == container)
+        .ok_or_else(|| CrmError::Contacts("authoritative iCloud container was not found".into()))?;
+    if !selected.kind.to_lowercase().contains("icloud") {
+        return Err(CrmError::Contacts(
+            "the authoritative contact container is not an iCloud account".into(),
+        ));
+    }
     let contacts = apple::contacts(configured, container)?;
     let fingerprint = apple::schema_fingerprint(configured, container)?;
     let conflicts = duplicate_identities(&contacts);
@@ -29,7 +38,12 @@ pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncRepo
     let seen: HashSet<_> = contacts.iter().map(|contact| contact.id.as_str()).collect();
     let mut imported = 0;
     for contact in &contacts {
-        if reconcile_contact(crm, contact, &conflicts)? {
+        if reconcile_contact(
+            crm,
+            contact,
+            &conflicts,
+            config.self_identity.apple_contact_id.as_deref(),
+        )? {
             imported += 1;
         }
     }
@@ -57,6 +71,7 @@ fn reconcile_contact(
     crm: &Connection,
     contact: &AppleContact,
     conflicts: &HashMap<String, Vec<String>>,
+    self_apple_id: Option<&str>,
 ) -> Result<bool> {
     let existing: Option<String> = crm
         .query_row(
@@ -91,14 +106,10 @@ fn reconcile_contact(
         params![person_id, display_name(contact)],
     )?;
     crm.execute(
-        "UPDATE identities SET active=0 WHERE person_id=?1 AND is_self=0",
+        "UPDATE identities SET active=0 WHERE person_id=?1",
         [&person_id],
     )?;
-    let is_self = crm.query_row(
-        "SELECT EXISTS(SELECT 1 FROM identities WHERE person_id=?1 AND is_self=1)",
-        [&person_id],
-        |row| row.get::<_, bool>(0),
-    )?;
+    let is_self = self_apple_id == Some(contact.id.as_str());
     for (kind, value) in contact_identities(contact) {
         let normalized = repository::normalize_identity(kind, value);
         if conflicts.contains_key(&normalized) {
@@ -242,5 +253,83 @@ fn display_name(contact: &AppleContact) -> String {
         contact.organization.trim().into()
     } else {
         "Unnamed contact".into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+
+    #[test]
+    fn retiring_contact_preserves_history_and_overlays() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state)
+                 VALUES ('person', 'Alex', 'apple-1', 'active');
+                 INSERT INTO notes(id, person_id, body) VALUES ('note', 'person', 'keep me');
+                 INSERT INTO identities(id, person_id, kind, value, normalized_value, active)
+             VALUES ('identity', 'person', 'email', 'alex@example.com', 'alex@example.com', 1);",
+            )
+            .unwrap();
+
+        retire_missing(&connection, &HashSet::new()).unwrap();
+
+        let state: String = connection
+            .query_row(
+                "SELECT lifecycle_state FROM people WHERE id='person'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let notes: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM notes WHERE person_id='person'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let identity_active: bool = connection
+            .query_row(
+                "SELECT active FROM identities WHERE id='identity'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "retired");
+        assert_eq!(notes, 1);
+        assert!(!identity_active);
+    }
+
+    #[test]
+    fn duplicate_identity_is_not_claimed_by_either_contact() {
+        let mut first = sample_contact("apple-1");
+        let mut second = sample_contact("apple-2");
+        first.emails[0].value = "same@example.com".into();
+        second.emails[0].value = "same@example.com".into();
+        let duplicates = duplicate_identities(&[first, second]);
+        assert_eq!(duplicates["same@example.com"], ["apple-1", "apple-2"]);
+    }
+
+    fn sample_contact(id: &str) -> AppleContact {
+        AppleContact {
+            id: id.into(),
+            name_prefix: String::new(),
+            given_name: "Alex".into(),
+            middle_name: String::new(),
+            family_name: "Example".into(),
+            name_suffix: String::new(),
+            nickname: String::new(),
+            emails: vec![apple::LabeledValue {
+                label: None,
+                value: "alex@example.com".into(),
+            }],
+            phones: Vec::new(),
+            organization: String::new(),
+            department: String::new(),
+            job_title: String::new(),
+        }
     }
 }

@@ -82,6 +82,25 @@ pub fn resolve(connection: &Connection, id: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn resolve_absent(
+    connection: &Connection,
+    kind: &str,
+    active_subjects: &std::collections::HashSet<String>,
+) -> Result<()> {
+    let mut statement = connection
+        .prepare("SELECT id, subject_key FROM review_items WHERE kind=?1 AND status='pending'")?;
+    let rows: Vec<(String, String)> = statement
+        .query_map([kind], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<std::result::Result<_, _>>()?;
+    drop(statement);
+    for (id, subject) in rows {
+        if !active_subjects.contains(&subject) {
+            resolve(connection, &id)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn link_migration_person(
     connection: &Connection,
     review_id: &str,
@@ -183,4 +202,41 @@ pub fn pending_migration_count(connection: &Connection) -> Result<usize> {
         |row| row.get(0),
     )?;
     Ok(count as usize)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+
+    #[test]
+    fn migration_link_preserves_person_and_resolves_review() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO people(id, display_name) VALUES ('person', 'Alex')",
+                [],
+            )
+            .unwrap();
+        let review_id = enqueue(
+            &connection,
+            "migration_person",
+            "person",
+            "Link Alex",
+            serde_json::json!({}),
+        )
+        .unwrap();
+        let person_id = link_migration_person(&connection, &review_id, "apple-1").unwrap();
+        assert_eq!(person_id, "person");
+        let row: (String, String) = connection
+            .query_row(
+                "SELECT apple_contact_id, lifecycle_state FROM people WHERE id='person'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("apple-1".into(), "active".into()));
+        assert!(pending(&connection).unwrap().is_empty());
+    }
 }

@@ -176,12 +176,16 @@ pub(crate) fn asset_for_hash(connection: &Connection, sha256: &str) -> Result<Op
 }
 
 pub(crate) fn status(connection: &Connection) -> Result<PhotoStatus> {
-    let total_people: i64 =
-        connection.query_row("SELECT COUNT(*) FROM people", [], |row| row.get(0))?;
+    let total_people: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM people WHERE lifecycle_state='active'",
+        [],
+        |row| row.get(0),
+    )?;
     let count = |state: &str| -> Result<i64> {
         connection
             .query_row(
-                "SELECT COUNT(*) FROM photo_links WHERE state = ?1",
+                "SELECT COUNT(*) FROM photo_links l JOIN people p ON p.id=l.person_id
+                 WHERE l.state=?1 AND p.lifecycle_state='active'",
                 [state],
                 |row| row.get(0),
             )

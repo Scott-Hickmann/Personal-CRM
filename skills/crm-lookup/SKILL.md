@@ -56,5 +56,5 @@ Return the Mermaid block when a visual connection chart is appropriate. State th
 ## Guardrails
 
 - Never read source databases directly; use `crm`, whose adapters enforce read-only access.
-- Never use `note`, `fact`, `tag`, `person add`, `sync`, `auth`, or `analyze` in this lookup skill.
+- Never use `note`, `fact`, `tag`, `review`, `run`, `start`, `stop`, or `auth` in this lookup skill.
 - Surface `person_not_found` and `ambiguous_person` errors instead of guessing.
