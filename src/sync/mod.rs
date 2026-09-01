@@ -151,7 +151,7 @@ fn add_participant(
     identity: &str,
     role: &str,
 ) -> Result<()> {
-    let normalized = crate::repository::normalize_identity("contact", identity);
+    let normalized = crate::repository::normalize_observed_identity(identity);
     let person_id: Option<String> = crm
         .query_row(
             "SELECT i.person_id FROM identities i JOIN people p ON p.id=i.person_id
@@ -178,7 +178,7 @@ pub(crate) fn rebind_unresolved_participants(crm: &Connection) -> Result<usize> 
     drop(statement);
     let mut rebound = 0;
     for (interaction_id, identity, role) in rows {
-        let normalized = crate::repository::normalize_identity("contact", &identity);
+        let normalized = crate::repository::normalize_observed_identity(&identity);
         let person_id: Option<String> = crm
             .query_row(
                 "SELECT i.person_id FROM identities i JOIN people p ON p.id=i.person_id

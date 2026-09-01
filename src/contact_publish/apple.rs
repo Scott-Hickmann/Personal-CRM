@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
@@ -37,6 +38,52 @@ pub struct AppleContact {
 pub struct LabeledValue {
     pub label: Option<String>,
     pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewContact {
+    pub container_id: String,
+    pub display_name: String,
+    pub emails: Vec<LabeledValue>,
+    pub phones: Vec<LabeledValue>,
+    pub organization: String,
+}
+
+pub fn create(contact: &NewContact) -> Result<String> {
+    const HELPER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/create-contact.swift");
+    let mut child = Command::new("xcrun")
+        .args(["swift", HELPER])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| CrmError::Contacts(format!("could not start Contacts helper: {error}")))?;
+    use std::io::Write;
+    let input =
+        serde_json::to_vec(contact).map_err(|error| CrmError::Serialization(error.to_string()))?;
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&input)
+        .map_err(|error| CrmError::Contacts(format!("could not send contact data: {error}")))?;
+    let response = child
+        .wait_with_output()
+        .map_err(|error| CrmError::Contacts(format!("Contacts helper failed: {error}")))?;
+    if !response.status.success() {
+        return Err(CrmError::Contacts(
+            String::from_utf8_lossy(&response.stderr).trim().to_owned(),
+        ));
+    }
+    let id = String::from_utf8_lossy(&response.stdout).trim().to_owned();
+    if id.is_empty() {
+        Err(CrmError::Contacts(
+            "Contacts helper returned no identifier".into(),
+        ))
+    } else {
+        Ok(id)
+    }
 }
 
 pub fn containers(configured: &Path) -> Result<Vec<AppleContainer>> {

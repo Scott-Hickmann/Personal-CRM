@@ -127,6 +127,40 @@ fn reconcile(format: Format, config_path: PathBuf, args: PhotosLibraryArgs) -> R
     output::emit(format, "photos.reconcile", &result, table)
 }
 
+pub(crate) fn reconcile_automatic(config_path: &std::path::Path) -> Result<()> {
+    let connection = commands::open_database(config_path)?;
+    let library = photos_library::discover_library(None)?;
+    let catalog = PhotosCatalog::open(&library)?;
+    let current_people = catalog.named_people()?;
+    let current_by_id = current_people
+        .iter()
+        .map(|person| (person.person_uuid.as_str(), person))
+        .collect::<HashMap<_, _>>();
+    for person in photo_links::review_people(&connection, None)? {
+        let Some(link) = &person.link else { continue };
+        if link.state != "person_linked" {
+            continue;
+        }
+        let Some(uuid) = link.photos_person_uuid.as_deref() else {
+            continue;
+        };
+        if let Some(current) = current_by_id.get(uuid) {
+            if link.photos_name_snapshot.as_deref() != Some(current.name.as_str()) {
+                photo_links::link_photos_person(
+                    &connection,
+                    &person.person_id,
+                    &current.person_uuid,
+                    &current.name,
+                    current.key_asset_id.as_deref(),
+                )?;
+            }
+        } else {
+            photo_links::set_review_state(&connection, &person.person_id, "stale")?;
+        }
+    }
+    Ok(())
+}
+
 fn select_candidate(candidates: &[NamedPhotosPerson]) -> Result<Option<&NamedPhotosPerson>> {
     for (index, candidate) in candidates.iter().enumerate() {
         eprintln!("  {}. {}", index + 1, candidate.name);

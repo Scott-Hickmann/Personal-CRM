@@ -9,6 +9,7 @@ use super::state;
 use crate::error::{CrmError, Result};
 use crate::gmail::Credentials;
 use crate::google_contacts::{Client, Person};
+use crate::review;
 
 #[derive(Debug, Serialize)]
 pub struct ActionSummary {
@@ -37,7 +38,6 @@ pub fn run(
     accounts: &[String],
     desired: Vec<DesiredContact>,
     apply: bool,
-    allow_large_delete: bool,
 ) -> Result<PublishReport> {
     let mirrors = state::list(connection)?;
     let mut clients = HashMap::new();
@@ -47,29 +47,17 @@ pub fn run(
             CrmError::Contacts(format!("missing OAuth credentials for {account}"))
         })?;
         let client = Client::for_account(account_credentials, account)?;
-        remote.insert(account.clone(), client.list()?);
+        let mut people = client.list()?;
+        enqueue_unmanaged_candidates(connection, account, &people)?;
+        remove_duplicate_managed(connection, account, &mut people)?;
+        remote.insert(account.clone(), people);
         clients.insert(account.clone(), client);
     }
-    let managed_count = remote
-        .values()
-        .flatten()
-        .filter(|person| owner_id(person).is_some())
-        .count();
     let actions = plan::build(accounts, desired, mirrors, remote)?;
-    let delete_count = count(&actions, ActionKind::Delete);
-    if apply && !allow_large_delete && large_delete(delete_count, managed_count) {
-        return Err(CrmError::Contacts(format!(
-            "refusing to delete {delete_count} of {managed_count} managed Google contacts; rerun with --allow-large-delete after reviewing the preview"
-        )));
-    }
     if apply {
         apply_actions(connection, &clients, &actions)?;
     }
     Ok(report(actions, apply))
-}
-
-fn large_delete(delete_count: usize, managed_count: usize) -> bool {
-    delete_count >= 5 && delete_count.saturating_mul(10) > managed_count
 }
 
 fn apply_actions(
@@ -88,16 +76,7 @@ fn apply_actions(
                 save_response(connection, desired, &created)?;
             }
             ActionKind::Update => update(connection, client, action)?,
-            ActionKind::Delete => {
-                if let Some(resource) = action
-                    .remote
-                    .as_ref()
-                    .and_then(|person| person.resource_name.as_deref())
-                {
-                    client.delete(resource)?;
-                }
-                state::remove(connection, &action.apple_id, &action.account)?;
-            }
+            ActionKind::Delete => enqueue_delete(connection, action)?,
             ActionKind::Unchanged => {
                 save_response(
                     connection,
@@ -108,10 +87,131 @@ fn apply_actions(
             ActionKind::Forget => {
                 state::remove(connection, &action.apple_id, &action.account)?;
             }
-            ActionKind::Collision => {}
+            ActionKind::Collision => enqueue_collision(connection, action)?,
         }
     }
     Ok(())
+}
+
+fn enqueue_delete(connection: &Connection, action: &PlannedAction) -> Result<()> {
+    let resource = action
+        .remote
+        .as_ref()
+        .and_then(|person| person.resource_name.as_deref());
+    review::enqueue(
+        connection,
+        "google_delete",
+        &format!("{}:{}", action.account, action.apple_id),
+        &format!(
+            "Delete managed Google contact {} from {}?",
+            action.apple_id, action.account
+        ),
+        serde_json::json!({
+            "account": action.account,
+            "apple_contact_id": action.apple_id,
+            "google_resource_name": resource,
+        }),
+    )?;
+    Ok(())
+}
+
+fn enqueue_collision(connection: &Connection, action: &PlannedAction) -> Result<()> {
+    review::enqueue(
+        connection,
+        "google_collision",
+        &format!("{}:{}", action.account, action.apple_id),
+        &format!(
+            "Resolve Google collision for {} in {}",
+            action.apple_id, action.account
+        ),
+        serde_json::json!({"account": action.account, "apple_contact_id": action.apple_id}),
+    )?;
+    Ok(())
+}
+
+fn enqueue_unmanaged_candidates(
+    connection: &Connection,
+    account: &str,
+    people: &[Person],
+) -> Result<()> {
+    for person in people.iter().filter(|person| owner_id(person).is_none()) {
+        let Some(resource) = person.resource_name.as_deref() else {
+            continue;
+        };
+        let name = person.names.first().map(display_name).unwrap_or_default();
+        let identity = person
+            .email_addresses
+            .first()
+            .map(|item| item.value.as_str())
+            .or_else(|| person.phone_numbers.first().map(|item| item.value.as_str()));
+        if name.is_empty() && identity.is_none() {
+            continue;
+        }
+        review::enqueue(
+            connection,
+            "contact_candidate",
+            &format!("google:{account}:{resource}"),
+            &format!(
+                "Create an iCloud contact for {}?",
+                if name.is_empty() {
+                    identity.unwrap()
+                } else {
+                    &name
+                }
+            ),
+            serde_json::json!({
+                "source": "google", "account": account, "resource_name": resource,
+                "name": name, "emails": person.email_addresses, "phones": person.phone_numbers,
+                "organizations": person.organizations,
+            }),
+        )?;
+    }
+    Ok(())
+}
+
+fn display_name(name: &crate::google_contacts::Name) -> String {
+    format!("{} {}", name.given_name.trim(), name.family_name.trim())
+        .trim()
+        .to_owned()
+}
+
+fn remove_duplicate_managed(
+    connection: &Connection,
+    account: &str,
+    people: &mut Vec<Person>,
+) -> Result<()> {
+    let mut seen = std::collections::HashSet::new();
+    let mut kept = Vec::with_capacity(people.len());
+    for person in people.drain(..) {
+        let Some(apple_id) = owner_id(&person) else {
+            kept.push(person);
+            continue;
+        };
+        if seen.insert(apple_id.to_owned()) {
+            kept.push(person);
+        } else {
+            review::enqueue(
+                connection,
+                "google_collision",
+                &format!("duplicate:{account}:{apple_id}"),
+                &format!("Google has duplicate managed contacts for {apple_id} in {account}"),
+                serde_json::json!({"account": account, "apple_contact_id": apple_id}),
+            )?;
+        }
+    }
+    *people = kept;
+    Ok(())
+}
+
+pub fn delete_managed(
+    connection: &Connection,
+    credentials: &Credentials,
+    account: &str,
+    apple_id: &str,
+    resource: &str,
+) -> Result<()> {
+    Client::for_account(credentials, account)?.delete(resource)?;
+    state::remove(connection, apple_id, account)
 }
 
 fn update(connection: &Connection, client: &Client, action: &PlannedAction) -> Result<()> {
@@ -179,17 +279,4 @@ fn report(actions: Vec<PlannedAction>, applied: bool) -> PublishReport {
 
 fn count(actions: &[PlannedAction], kind: ActionKind) -> usize {
     actions.iter().filter(|action| action.kind == kind).count()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn deletion_guard_requires_five_and_more_than_ten_percent() {
-        assert!(!large_delete(4, 10));
-        assert!(!large_delete(5, 50));
-        assert!(large_delete(5, 49));
-        assert!(large_delete(5, 0));
-    }
 }

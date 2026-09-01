@@ -66,6 +66,22 @@ pub fn pending(connection: &Connection) -> Result<Vec<ReviewItem>> {
         .collect::<std::result::Result<_, _>>()?)
 }
 
+pub fn get_pending(connection: &Connection, id: &str) -> Result<ReviewItem> {
+    pending(connection)?
+        .into_iter()
+        .find(|item| item.id == id)
+        .ok_or_else(|| CrmError::InvalidConfig(format!("pending review item not found: {id}")))
+}
+
+pub fn resolve(connection: &Connection, id: &str) -> Result<()> {
+    connection.execute(
+        "UPDATE review_items SET status='resolved', resolved_at=CURRENT_TIMESTAMP,
+         updated_at=CURRENT_TIMESTAMP WHERE id=?1 AND status='pending'",
+        [id],
+    )?;
+    Ok(())
+}
+
 pub fn link_migration_person(
     connection: &Connection,
     review_id: &str,

@@ -1,43 +1,12 @@
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
-
-use crate::analysis;
-use crate::cli::{AnalyzeArgs, GraphArgs, PersonReference};
+use crate::cli::{GraphArgs, PersonReference};
 use crate::config::Config;
 use crate::db;
 use crate::error::{CrmError, Result};
 use crate::graph;
 use crate::output::{self, Format};
 use crate::{repository, scoring};
-
-#[derive(Serialize)]
-struct AnalyzeResult {
-    analysis: analysis::AnalysisReport,
-    people_scored: usize,
-}
-
-pub fn analyze(format: Format, config_path: PathBuf, args: AnalyzeArgs) -> Result<()> {
-    let (config, connection) = open(&config_path)?;
-    let report = analysis::run(&config, &connection, args.limit)?;
-    let people_scored = scoring::recalculate_all(&connection)?;
-    let result = AnalyzeResult {
-        analysis: report,
-        people_scored,
-    };
-    output::emit(
-        format,
-        "analyze",
-        &result,
-        format!(
-            "analyzed      {}\nmentions      {}\nrelationships {}\npeople scored {}",
-            result.analysis.analyzed,
-            result.analysis.mentions,
-            result.analysis.relationships,
-            result.people_scored
-        ),
-    )
-}
 
 pub fn explain(format: Format, config_path: PathBuf, args: PersonReference) -> Result<()> {
     let (_, connection) = open(&config_path)?;

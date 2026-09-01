@@ -1,9 +1,9 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::cli::{ContactsCommand, ContactsConfigureArgs, ContactsPublishArgs};
+use crate::cli::{ContactsCommand, ContactsConfigureArgs};
 use crate::config::Config;
 use crate::contact_publish::{self, apple};
 use crate::error::{CrmError, Result};
@@ -27,7 +27,6 @@ pub(crate) fn run(format: Format, config_path: PathBuf, command: ContactsCommand
     match command {
         ContactsCommand::Containers => list_containers(format, &config_path),
         ContactsCommand::Configure(args) => configure(format, config_path, args),
-        ContactsCommand::Publish(args) => publish(format, config_path, args),
         ContactsCommand::Status => status(format, config_path, "contacts.status"),
     }
 }
@@ -94,7 +93,16 @@ fn configure(format: Format, config_path: PathBuf, args: ContactsConfigureArgs) 
     status(format, config_path, "contacts.configure")
 }
 
-fn publish(format: Format, config_path: PathBuf, args: ContactsPublishArgs) -> Result<()> {
+pub(crate) fn publish_automatic(
+    config_path: &Path,
+) -> Result<contact_publish::reconcile::PublishReport> {
+    publish_service(config_path, true)
+}
+
+fn publish_service(
+    config_path: &Path,
+    apply: bool,
+) -> Result<contact_publish::reconcile::PublishReport> {
     let config = Config::load(&config_path)?;
     let publish = &config.contact_publish;
     let container = publish
@@ -126,27 +134,14 @@ fn publish(format: Format, config_path: PathBuf, args: ContactsPublishArgs) -> R
         apple::contacts(contacts_path(&config)?, container)?,
         publish,
     )?;
-    let connection = crate::commands::open_database(&config_path)?;
-    let report = contact_publish::reconcile::run(
+    let connection = crate::commands::open_database(config_path)?;
+    contact_publish::reconcile::run(
         &connection,
         &credentials,
         &[personal.clone(), workspace.clone()],
         desired,
-        args.apply,
-        args.allow_large_delete,
-    )?;
-    let mode = if report.applied { "applied" } else { "preview" };
-    let table = format!(
-        "{mode}\ncreate     {:>6}\nupdate     {:>6}\ndelete     {:>6}\nrecreate   {:>6}\ncollision  {:>6}\nunchanged  {:>6}\nforget     {:>6}",
-        report.create,
-        report.update,
-        report.delete,
-        report.recreate,
-        report.collision,
-        report.unchanged,
-        report.forget
-    );
-    output::emit(format, "contacts.publish", &report, table)
+        apply,
+    )
 }
 
 fn status(format: Format, config_path: PathBuf, command: &str) -> Result<()> {

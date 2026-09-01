@@ -13,7 +13,6 @@ use crate::output::{self, Format};
 use crate::query::{self, QueryOptions};
 use crate::repository;
 use crate::source::ReadOnlySource;
-use crate::sync::{self, SyncTarget};
 
 #[derive(Serialize)]
 struct Status {
@@ -21,6 +20,14 @@ struct Status {
     database_path: PathBuf,
     schema_version: i64,
     source_count: i64,
+    daemon_running: bool,
+    daemon_pid: Option<i64>,
+    queued_jobs: i64,
+    failed_jobs: i64,
+    pending_reviews: i64,
+    active_people: i64,
+    retired_people: i64,
+    migration_people: i64,
 }
 
 pub(crate) fn run(format: Format, config: Option<PathBuf>, command: Command) -> Result<()> {
@@ -36,16 +43,18 @@ pub(crate) fn run(format: Format, config: Option<PathBuf>, command: Command) -> 
             command: ConfigCommand::Show,
         } => show_config(format, config_path),
         Command::Doctor => doctor(format, config_path),
+        Command::Start => crate::daemon_commands::start(format, config_path),
+        Command::Stop => crate::daemon_commands::stop(format, config_path),
         Command::Status => status(format, config_path),
         Command::Review(args) => crate::review_commands::run(format, config_path, args),
+        Command::Run(args) => crate::daemon_commands::run_job(format, config_path, args.job),
+        Command::Daemon => crate::daemon::run(config_path),
         Command::Person { command } => person(format, config_path, command),
         Command::Note { command } => note(format, config_path, command),
         Command::Fact { command } => fact(format, config_path, command),
         Command::Tag { command } => tag(format, config_path, command),
-        Command::Sync { target } => sync_sources(format, config_path, target),
         Command::Query(args) => query_entities(format, config_path, args),
         Command::History(args) => crate::history_commands::run(format, config_path, args),
-        Command::Analyze(args) => crate::analytics_commands::analyze(format, config_path, args),
         Command::Explain(args) => crate::analytics_commands::explain(format, config_path, args),
         Command::Graph(args) => crate::analytics_commands::graph(format, config_path, args),
         Command::Face { command } => crate::face_commands::run(format, command),
@@ -106,6 +115,14 @@ fn init(format: Format, config_path: PathBuf, args: InitArgs) -> Result<()> {
         database_path,
         schema_version: db::schema_version(&connection)?,
         source_count: 0,
+        daemon_running: false,
+        daemon_pid: None,
+        queued_jobs: 0,
+        failed_jobs: 0,
+        pending_reviews: 0,
+        active_people: 0,
+        retired_people: 0,
+        migration_people: 1,
     };
     output::emit(format, "config.init", &status, "CRM initialized".into())
 }
@@ -170,24 +187,6 @@ fn tag(format: Format, config_path: PathBuf, command: TagCommand) -> Result<()> 
     )
 }
 
-fn sync_sources(format: Format, config_path: PathBuf, target: SyncTarget) -> Result<()> {
-    ensure_config(&config_path)?;
-    let config = Config::load(&config_path)?;
-    let connection = db::open(&config_path.parent().unwrap().join("crm.sqlite3"))?;
-    let reports = sync::run(target, &config, &connection)?;
-    let table = reports
-        .iter()
-        .map(|report| {
-            format!(
-                "{:<16} imported {:>7}  deleted {:>5}",
-                report.source, report.imported, report.deleted
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    output::emit(format, "sync", &reports, table)
-}
-
 fn show_config(format: Format, config_path: PathBuf) -> Result<()> {
     ensure_config(&config_path)?;
     let config = Config::load(&config_path)?;
@@ -223,19 +222,54 @@ fn status(format: Format, config_path: PathBuf) -> Result<()> {
     let connection = db::open(&database_path)?;
     let source_count =
         connection.query_row("SELECT COUNT(*) FROM sources", [], |row| row.get(0))?;
+    let (daemon_pid, daemon_running): (Option<i64>, bool) = connection.query_row(
+        "SELECT pid, COALESCE(pid IS NOT NULL AND
+         (julianday('now')-julianday(heartbeat_at))*86400 < 10, 0)
+         FROM daemon_state WHERE id=1
+         UNION ALL SELECT NULL, 0 LIMIT 1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let count = |sql| connection.query_row(sql, [], |row| row.get::<_, i64>(0));
     let status = Status {
         config_path,
         database_path,
         schema_version: db::schema_version(&connection)?,
         source_count,
+        daemon_running,
+        daemon_pid,
+        queued_jobs: count("SELECT COUNT(*) FROM jobs WHERE state='queued'")?,
+        failed_jobs: count("SELECT COUNT(*) FROM jobs WHERE state='failed'")?,
+        pending_reviews: count("SELECT COUNT(*) FROM review_items WHERE status='pending'")?,
+        active_people: count("SELECT COUNT(*) FROM people WHERE lifecycle_state='active'")?,
+        retired_people: count("SELECT COUNT(*) FROM people WHERE lifecycle_state='retired'")?,
+        migration_people: count(
+            "SELECT COUNT(*) FROM people WHERE lifecycle_state='migration_pending'",
+        )?,
     };
     output::emit(
         format,
         "status",
         &status,
         format!(
-            "schema version  {}\nsources         {}",
-            status.schema_version, status.source_count
+            "daemon         {}{}\nschema version  {}\nsources         {}\npeople          {} active, {} retired, {} migration\njobs            {} queued, {} failed\nreview          {} pending",
+            if status.daemon_running {
+                "running"
+            } else {
+                "stopped"
+            },
+            status
+                .daemon_pid
+                .map(|pid| format!(" (PID {pid})"))
+                .unwrap_or_default(),
+            status.schema_version,
+            status.source_count,
+            status.active_people,
+            status.retired_people,
+            status.migration_people,
+            status.queued_jobs,
+            status.failed_jobs,
+            status.pending_reviews
         ),
     )
 }

@@ -5,7 +5,6 @@ use clap::{Args, Parser, Subcommand};
 use crate::error::Result;
 use crate::output::Format;
 use crate::query::Entity;
-use crate::sync::SyncTarget;
 
 #[derive(Parser)]
 #[command(name = "crm", version, about)]
@@ -25,8 +24,13 @@ pub(crate) enum Command {
         command: ConfigCommand,
     },
     Doctor,
+    Start,
+    Stop,
     Status,
     Review(ReviewArgs),
+    Run(RunArgs),
+    #[command(hide = true)]
+    Daemon,
     Person {
         #[command(subcommand)]
         command: PersonCommand,
@@ -43,13 +47,8 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: TagCommand,
     },
-    Sync {
-        #[arg(value_enum, default_value = "all")]
-        target: SyncTarget,
-    },
     Query(QueryArgs),
     History(HistoryArgs),
-    Analyze(AnalyzeArgs),
     Explain(PersonReference),
     Graph(GraphArgs),
     Face {
@@ -74,7 +73,6 @@ pub(crate) enum Command {
 pub(crate) enum ContactsCommand {
     Containers,
     Configure(ContactsConfigureArgs),
-    Publish(ContactsPublishArgs),
     Status,
 }
 
@@ -88,14 +86,6 @@ pub(crate) struct ContactsConfigureArgs {
     pub workspace_account: String,
     #[arg(long = "work-domain", required = true)]
     pub work_domains: Vec<String>,
-}
-
-#[derive(Args)]
-pub(crate) struct ContactsPublishArgs {
-    #[arg(long)]
-    pub apply: bool,
-    #[arg(long, requires = "apply")]
-    pub allow_large_delete: bool,
 }
 
 #[derive(Subcommand)]
@@ -145,12 +135,6 @@ pub(crate) struct HistoryArgs {
 }
 
 #[derive(Args)]
-pub(crate) struct AnalyzeArgs {
-    #[arg(long, default_value_t = 20)]
-    pub limit: u32,
-}
-
-#[derive(Args)]
 pub(crate) struct GraphArgs {
     pub person: Option<String>,
     #[arg(long, default_value_t = 0.7)]
@@ -166,6 +150,12 @@ pub(crate) struct ReviewArgs {
     pub approve: bool,
     #[arg(long)]
     pub reject: bool,
+}
+
+#[derive(Args)]
+pub(crate) struct RunArgs {
+    #[arg(value_enum)]
+    pub job: crate::jobs::JobKind,
 }
 
 #[derive(Subcommand)]

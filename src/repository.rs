@@ -272,11 +272,22 @@ pub(crate) fn upsert_identity(
 
 pub(crate) fn normalize_identity(kind: &str, value: &str) -> String {
     match kind {
-        "phone" | "whatsapp" => value
-            .chars()
-            .filter(|character| character.is_ascii_digit() || *character == '+')
-            .collect(),
+        "phone" | "whatsapp" => value.chars().filter(char::is_ascii_digit).collect(),
         _ => value.trim().to_lowercase(),
+    }
+}
+
+pub(crate) fn normalize_observed_identity(value: &str) -> String {
+    let value = value.trim().to_lowercase();
+    if let Some((local, domain)) = value.rsplit_once('@')
+        && matches!(domain, "s.whatsapp.net" | "c.us" | "lid")
+    {
+        return normalize_identity("phone", local);
+    }
+    if value.contains('@') {
+        normalize_identity("email", &value)
+    } else {
+        normalize_identity("phone", &value)
     }
 }
 

@@ -137,14 +137,14 @@ fn migration_candidate(crm: &Connection, contact: &AppleContact) -> Result<Optio
 
 fn retire_missing(crm: &Connection, seen: &HashSet<&str>) -> Result<()> {
     let mut statement = crm.prepare(
-        "SELECT id, apple_contact_id, display_name FROM people
+        "SELECT id, apple_contact_id FROM people
          WHERE lifecycle_state='active' AND apple_contact_id IS NOT NULL",
     )?;
-    let rows: Vec<(String, String, String)> = statement
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+    let rows: Vec<(String, String)> = statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<std::result::Result<_, _>>()?;
     drop(statement);
-    for (person_id, apple_id, name) in rows {
+    for (person_id, apple_id) in rows {
         if seen.contains(apple_id.as_str()) {
             continue;
         }
@@ -156,13 +156,6 @@ fn retire_missing(crm: &Connection, seen: &HashSet<&str>) -> Result<()> {
         crm.execute(
             "UPDATE identities SET active=0 WHERE person_id=?1",
             [&person_id],
-        )?;
-        review::enqueue(
-            crm,
-            "google_delete",
-            &apple_id,
-            &format!("Review Google deletion for retired iCloud contact {name}"),
-            serde_json::json!({"person_id": person_id, "apple_contact_id": apple_id}),
         )?;
     }
     Ok(())
