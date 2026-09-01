@@ -15,6 +15,7 @@ pub fn run(format: Format, config_path: PathBuf, args: ReviewArgs) -> Result<()>
         if args.approve || args.reject || args.link_icloud.is_some() {
             return Err(CrmError::InvalidConfig("a review id is required".into()));
         }
+        refresh_whatsapp_reviews(&Config::load(&config_path)?, &connection)?;
         let items = review::pending(&connection)?;
         let table = items
             .iter()
@@ -77,6 +78,14 @@ pub fn run(format: Format, config_path: PathBuf, args: ReviewArgs) -> Result<()>
     Err(CrmError::InvalidConfig(
         "choose --link-icloud, --approve, or --reject".into(),
     ))
+}
+
+fn refresh_whatsapp_reviews(config: &Config, connection: &rusqlite::Connection) -> Result<()> {
+    if config.paths.whatsapp.is_some() {
+        sync::run(SyncTarget::Whatsapp, config, connection)?;
+        review::enqueue_unresolved_candidates(connection)?;
+    }
+    Ok(())
 }
 
 fn approve_contact(
@@ -277,3 +286,6 @@ fn validate_icloud_contact(config: &Config, apple_id: &str) -> Result<()> {
         )))
     }
 }
+
+#[cfg(test)]
+mod tests;

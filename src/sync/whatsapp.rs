@@ -21,14 +21,18 @@ pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncRepo
         &["Z_PK", "ZMESSAGEDATE", "ZISFROMME", "ZTEXT"],
     )?;
     source.require_columns("ZWAPROFILEPUSHNAME", &["ZJID", "ZPUSHNAME"])?;
+    source.require_columns(
+        "ZWACHATSESSION",
+        &["Z_PK", "ZCONTACTJID", "ZPARTNERNAME", "ZREMOVED"],
+    )?;
     let mut statement = source.connection().prepare(
         "SELECT m.Z_PK, m.ZSTANZAID, s.ZCONTACTJID, datetime(m.ZMESSAGEDATE + 978307200, 'unixepoch'),
                 m.ZISFROMME, m.ZTEXT, m.ZFROMJID, m.ZTOJID, m.ZMESSAGETYPE,
                 profile.ZPUSHNAME, m.ZPUSHNAME, s.ZPARTNERNAME
-         FROM ZWAMESSAGE m LEFT JOIN ZWACHATSESSION s ON s.Z_PK = m.ZCHATSESSION
+         FROM ZWAMESSAGE m JOIN ZWACHATSESSION s ON s.Z_PK = m.ZCHATSESSION
          LEFT JOIN ZWAPROFILEPUSHNAME profile
            ON profile.ZJID = CASE WHEN m.ZISFROMME = 1 THEN m.ZTOJID ELSE m.ZFROMJID END
-         WHERE m.ZMESSAGEDATE IS NOT NULL",
+         WHERE m.ZMESSAGEDATE IS NOT NULL AND COALESCE(s.ZREMOVED, 0) = 0",
     )?;
     let mut imported = HashSet::new();
     let mut rows = statement.query([])?;
