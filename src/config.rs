@@ -24,6 +24,8 @@ pub struct Config {
 pub struct SelfIdentity {
     pub name: String,
     #[serde(default)]
+    pub apple_contact_id: Option<String>,
+    #[serde(default)]
     pub emails: Vec<String>,
     #[serde(default)]
     pub phones: Vec<String>,
@@ -87,6 +89,7 @@ impl Config {
         Ok(Self {
             self_identity: SelfIdentity {
                 name,
+                apple_contact_id: None,
                 emails: normalize_strings(emails),
                 phones: normalize_strings(phones),
                 whatsapp_ids: Vec::new(),
