@@ -18,6 +18,7 @@ mod google_contacts;
 mod graph;
 mod history_commands;
 mod jobs;
+mod migration_cleanup;
 mod ollama;
 mod output;
 mod phone;

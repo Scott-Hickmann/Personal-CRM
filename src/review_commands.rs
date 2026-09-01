@@ -12,7 +12,7 @@ use crate::{commands, review, sync};
 pub fn run(format: Format, config_path: PathBuf, args: ReviewArgs) -> Result<()> {
     let connection = commands::open_database(&config_path)?;
     let Some(id) = args.id.as_deref() else {
-        if args.approve || args.reject || args.link_icloud.is_some() {
+        if args.approve || args.reject || args.delete_person || args.link_icloud.is_some() {
             return Err(CrmError::InvalidConfig("a review id is required".into()));
         }
         refresh_whatsapp_reviews(&Config::load(&config_path)?, &connection)?;
@@ -32,6 +32,15 @@ pub fn run(format: Format, config_path: PathBuf, args: ReviewArgs) -> Result<()>
             .join("\n");
         return output::emit(format, "review", &items, table);
     };
+    if args.delete_person {
+        let person_id = crate::migration_cleanup::delete_review_person(&connection, id)?;
+        return output::emit(
+            format,
+            "review.delete_person",
+            serde_json::json!({"review_id": id, "person_id": person_id}),
+            format!("deleted migration person {person_id}"),
+        );
+    }
     if let Some(apple_id) = args.link_icloud.as_deref() {
         let mut config = Config::load(&config_path)?;
         validate_icloud_contact(&config, apple_id)?;
@@ -85,7 +94,7 @@ pub fn run(format: Format, config_path: PathBuf, args: ReviewArgs) -> Result<()>
         };
     }
     Err(CrmError::InvalidConfig(
-        "choose --link-icloud, --approve, or --reject".into(),
+        "choose --link-icloud, --approve, --reject, or --delete-person".into(),
     ))
 }
 

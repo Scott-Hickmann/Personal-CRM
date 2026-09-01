@@ -83,10 +83,11 @@ Run the first reconciliation and review existing CRM-only people before starting
 crm run contacts
 crm review
 crm review REVIEW-ID --link-icloud ICLOUD-CONTACT-ID
+crm review REVIEW-ID --delete-person
 crm review REVIEW-ID --approve
 ```
 
-`--link-icloud` links a migration record to an existing iCloud contact. Approving a migration or contact-candidate review creates a contact in the selected iCloud container and then reconciles it into CRM. These are explicit, manual source writes and require macOS Contacts permission.
+`--link-icloud` links a migration record to an existing iCloud contact. `--delete-person` permanently removes the migration-pending CRM person while preserving shared interactions as unassigned. Approving a migration or contact-candidate review creates a contact in the selected iCloud container and then reconciles it into CRM. Linking and approving are explicit, manual source writes and require macOS Contacts permission; deleting affects only the local CRM.
 
 Published Google contacts carry a private ownership marker. The daemon automatically creates, updates, and recreates managed replicas. It never modifies an unmarked Google contact merely because an identity matches. Collisions and proposed deletions enter `crm review` and require explicit approval.
 

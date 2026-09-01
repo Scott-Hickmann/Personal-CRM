@@ -144,12 +144,14 @@ pub(crate) struct GraphArgs {
 #[derive(Args)]
 pub(crate) struct ReviewArgs {
     pub id: Option<String>,
-    #[arg(long, conflicts_with_all = ["approve", "reject"])]
+    #[arg(long, conflicts_with_all = ["approve", "reject", "delete_person"])]
     pub link_icloud: Option<String>,
-    #[arg(long, conflicts_with = "reject")]
+    #[arg(long, conflicts_with_all = ["reject", "delete_person"])]
     pub approve: bool,
-    #[arg(long)]
+    #[arg(long, conflicts_with = "delete_person")]
     pub reject: bool,
+    #[arg(long)]
+    pub delete_person: bool,
 }
 
 #[derive(Args)]
