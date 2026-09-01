@@ -188,7 +188,7 @@ fn source_labels<'a>(sources: impl Iterator<Item = &'a str>) -> Vec<String> {
 
 fn is_non_person_whatsapp_identity(identity: &str) -> bool {
     let identity = identity.trim().to_ascii_lowercase();
-    ["@g.us", "@broadcast", "@newsletter"]
+    ["@g.us", "@broadcast", "@newsletter", "@lid"]
         .iter()
         .any(|suffix| identity.ends_with(suffix))
 }

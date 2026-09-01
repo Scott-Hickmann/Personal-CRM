@@ -4,6 +4,7 @@ mod gmail;
 mod gmail_message;
 mod imessage;
 mod whatsapp;
+mod whatsapp_identity;
 
 use std::path::Path;
 
@@ -169,6 +170,20 @@ fn add_participant(
         params![interaction_id, person_id, identity, display_name, role],
     )?;
     Ok(())
+}
+
+fn replace_participant(
+    crm: &Connection,
+    interaction_id: &str,
+    identity: &str,
+    display_name: Option<&str>,
+    role: &str,
+) -> Result<()> {
+    crm.execute(
+        "DELETE FROM interaction_participants WHERE interaction_id=?1 AND role=?2",
+        params![interaction_id, role],
+    )?;
+    add_participant(crm, interaction_id, identity, display_name, role)
 }
 
 fn usable_display_name<'a>(identity: &str, name: Option<&'a str>) -> Option<&'a str> {

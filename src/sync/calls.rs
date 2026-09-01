@@ -1,6 +1,7 @@
 use rusqlite::Connection;
 use std::collections::HashSet;
 
+use super::whatsapp_identity::LidResolver;
 use super::{SyncReport, add_participant, finish_source, open_source, upsert_interaction};
 use crate::error::{CrmError, Result};
 
@@ -70,6 +71,12 @@ fn sync_apple(config: &crate::config::Config, crm: &Connection) -> Result<SyncRe
 }
 
 fn sync_whatsapp(config: &crate::config::Config, crm: &Connection) -> Result<SyncReport> {
+    let chat_path = config
+        .paths
+        .whatsapp
+        .as_ref()
+        .ok_or_else(|| CrmError::InvalidConfig("WhatsApp path is not configured".into()))?;
+    let identities = LidResolver::load(chat_path)?;
     let path =
         config.paths.whatsapp_calls.as_ref().ok_or_else(|| {
             CrmError::InvalidConfig("WhatsApp calls path is not configured".into())
@@ -89,6 +96,7 @@ fn sync_whatsapp(config: &crate::config::Config, crm: &Connection) -> Result<Syn
          WHERE e.ZDATE IS NOT NULL",
     )?;
     let mut imported = HashSet::new();
+    let mut cleared_participants = HashSet::new();
     let mut rows = statement.query([])?;
     while let Some(row) = rows.next()? {
         let native_id: String = row.get(1)?;
@@ -108,8 +116,20 @@ fn sync_whatsapp(config: &crate::config::Config, crm: &Connection) -> Result<Syn
             &metadata,
             &run_at,
         )?;
+        if cleared_participants.insert(interaction_id.clone()) {
+            crm.execute(
+                "DELETE FROM interaction_participants WHERE interaction_id=?1 AND role='participant'",
+                [&interaction_id],
+            )?;
+        }
         if let Some(identity) = row.get::<_, Option<String>>(5)? {
-            add_participant(crm, &interaction_id, &identity, None, "participant")?;
+            add_participant(
+                crm,
+                &interaction_id,
+                identities.resolve(&identity),
+                None,
+                "participant",
+            )?;
         }
     }
     let deleted = finish_source(crm, "whatsapp_calls", &run_at)?;

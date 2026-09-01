@@ -1,7 +1,8 @@
 use rusqlite::Connection;
 use std::collections::HashSet;
 
-use super::{SyncReport, add_participant, finish_source, open_source, upsert_interaction};
+use super::whatsapp_identity::LidResolver;
+use super::{SyncReport, finish_source, open_source, replace_participant, upsert_interaction};
 use crate::error::{CrmError, Result};
 
 pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncReport> {
@@ -10,6 +11,7 @@ pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncRepo
         .whatsapp
         .as_ref()
         .ok_or_else(|| CrmError::InvalidConfig("WhatsApp path is not configured".into()))?;
+    let identities = LidResolver::load(path)?;
     let (source, fingerprint, run_at) = open_source(
         crm,
         "whatsapp",
@@ -62,10 +64,10 @@ pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncRepo
             &run_at,
         )?;
         if let Some(identity) = if from_me { recipient } else { sender } {
-            add_participant(
+            replace_participant(
                 crm,
                 &interaction_id,
-                &identity,
+                identities.resolve(&identity),
                 display_name.as_deref(),
                 if from_me { "recipient" } else { "sender" },
             )?;

@@ -280,7 +280,7 @@ pub(crate) fn normalize_identity(kind: &str, value: &str) -> String {
 pub(crate) fn normalize_observed_identity(value: &str) -> String {
     let value = value.trim().to_lowercase();
     if let Some((local, domain)) = value.rsplit_once('@')
-        && matches!(domain, "s.whatsapp.net" | "c.us" | "lid")
+        && matches!(domain, "s.whatsapp.net" | "c.us")
     {
         return normalize_identity("phone", local);
     }
@@ -334,6 +334,10 @@ mod tests {
         assert_eq!(
             normalize_observed_identity("15550100@s.whatsapp.net"),
             "15550100"
+        );
+        assert_eq!(
+            normalize_observed_identity("2207730634782@lid"),
+            "2207730634782@lid"
         );
         assert_eq!(
             normalize_observed_identity("Alex@Example.com"),
