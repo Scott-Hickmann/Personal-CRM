@@ -149,3 +149,26 @@ fn group_existing_contact_and_sms_are_ineligible() {
     assert_eq!(review_candidates::enqueue(&connection).unwrap(), 0);
     assert!(review::pending(&connection).unwrap().is_empty());
 }
+
+#[test]
+fn whatsapp_announcement_is_never_a_contact_candidate() {
+    let (_directory, connection) = database();
+    interaction(
+        &connection,
+        "announcement",
+        "whatsapp",
+        "0@s.whatsapp.net",
+        "WhatsApp",
+    );
+    review::enqueue(
+        &connection,
+        "contact_candidate",
+        "+0",
+        "Create an iCloud contact for +0?",
+        serde_json::json!({"identity": "+0", "channels": "whatsapp"}),
+    )
+    .unwrap();
+
+    assert_eq!(review_candidates::enqueue(&connection).unwrap(), 0);
+    assert!(review::pending(&connection).unwrap().is_empty());
+}
