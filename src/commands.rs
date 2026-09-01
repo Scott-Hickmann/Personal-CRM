@@ -23,6 +23,7 @@ struct Status {
     daemon_running: bool,
     daemon_pid: Option<i64>,
     queued_jobs: i64,
+    running_jobs: i64,
     failed_jobs: i64,
     pending_reviews: i64,
     active_people: i64,
@@ -119,6 +120,7 @@ fn init(format: Format, config_path: PathBuf, args: InitArgs) -> Result<()> {
         daemon_running: false,
         daemon_pid: None,
         queued_jobs: 0,
+        running_jobs: 0,
         failed_jobs: 0,
         pending_reviews: 0,
         active_people: 0,
@@ -250,6 +252,7 @@ fn status(format: Format, config_path: PathBuf) -> Result<()> {
         daemon_running,
         daemon_pid,
         queued_jobs: count("SELECT COUNT(*) FROM jobs WHERE state='queued'")?,
+        running_jobs: count("SELECT COUNT(*) FROM jobs WHERE state='running'")?,
         failed_jobs: count("SELECT COUNT(*) FROM jobs WHERE state='failed'")?,
         pending_reviews: count("SELECT COUNT(*) FROM review_items WHERE status='pending'")?,
         active_people: count("SELECT COUNT(*) FROM people WHERE lifecycle_state='active'")?,
@@ -264,7 +267,7 @@ fn status(format: Format, config_path: PathBuf) -> Result<()> {
         "status",
         &status,
         format!(
-            "daemon         {}{}\nschema version  {}\nsources         {}\npeople          {} active, {} retired, {} migration\njobs            {} queued, {} failed\nreview          {} pending",
+            "daemon         {}{}\nschema version  {}\nsources         {}\npeople          {} active, {} retired, {} migration\njobs            {} queued, {} running, {} failed\nreview          {} pending",
             if status.daemon_running {
                 "running"
             } else {
@@ -280,6 +283,7 @@ fn status(format: Format, config_path: PathBuf) -> Result<()> {
             status.retired_people,
             status.migration_people,
             status.queued_jobs,
+            status.running_jobs,
             status.failed_jobs,
             status.pending_reviews
         ),

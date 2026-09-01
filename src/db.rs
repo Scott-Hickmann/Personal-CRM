@@ -1,6 +1,7 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::time::Duration;
 
 use rusqlite::Connection;
 
@@ -35,6 +36,7 @@ pub fn open(path: &Path) -> Result<Connection> {
         })?;
     }
     let connection = Connection::open(path)?;
+    connection.busy_timeout(Duration::from_secs(5))?;
     connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
     migrate(&connection)?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|source| {

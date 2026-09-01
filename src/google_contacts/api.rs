@@ -1,5 +1,6 @@
 use reqwest::blocking::{Client as HttpClient, RequestBuilder};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use std::time::Duration;
 use url::Url;
 
 use crate::error::{CrmError, Result};
@@ -7,6 +8,8 @@ use crate::gmail::Credentials;
 
 const API_ROOT: &str = "https://people.googleapis.com/v1";
 const KEYRING_SERVICE: &str = "personal-crm.google-contacts";
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 pub const PERSON_FIELDS: &str =
     "names,nicknames,emailAddresses,phoneNumbers,organizations,clientData,metadata";
 pub const UPDATE_FIELDS: &str =
@@ -24,7 +27,11 @@ impl Client {
             .map_err(keyring_error)?
             .get_password()
             .map_err(keyring_error)?;
-        let http = HttpClient::builder().build().map_err(network_error)?;
+        let http = HttpClient::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT)
+            .build()
+            .map_err(network_error)?;
         let token: TokenResponse = http
             .post(&credentials.token_uri)
             .form(&[

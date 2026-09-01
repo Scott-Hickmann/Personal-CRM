@@ -69,6 +69,17 @@ pub fn enqueue(
     Ok(())
 }
 
+pub fn recover_running(connection: &Connection) -> Result<usize> {
+    connection
+        .execute(
+            "UPDATE jobs SET state='queued', run_after=?1,
+             error='daemon restarted while job was running', updated_at=CURRENT_TIMESTAMP
+             WHERE state='running'",
+            [Utc::now().to_rfc3339()],
+        )
+        .map_err(Into::into)
+}
+
 pub fn process_one(config_path: &Path, connection: &Connection) -> Result<bool> {
     let job: Option<(i64, String, i64)> = connection
         .query_row(
@@ -212,5 +223,33 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM jobs", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn recovers_jobs_interrupted_by_a_daemon_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
+        enqueue(
+            &connection,
+            JobKind::GooglePublish,
+            "test",
+            Duration::zero(),
+        )
+        .unwrap();
+        connection
+            .execute("UPDATE jobs SET state='running'", [])
+            .unwrap();
+
+        assert_eq!(recover_running(&connection).unwrap(), 1);
+        let (state, error): (String, Option<String>) = connection
+            .query_row("SELECT state, error FROM jobs", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(state, "queued");
+        assert_eq!(
+            error.as_deref(),
+            Some("daemon restarted while job was running")
+        );
     }
 }
