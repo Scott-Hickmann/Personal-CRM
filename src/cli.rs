@@ -59,10 +59,42 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: PhotosCommand,
     },
+    Contacts {
+        #[command(subcommand)]
+        command: ContactsCommand,
+    },
     Auth {
         #[command(subcommand)]
         command: AuthCommand,
     },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ContactsCommand {
+    Containers,
+    Configure(ContactsConfigureArgs),
+    Publish(ContactsPublishArgs),
+    Status,
+}
+
+#[derive(Args)]
+pub(crate) struct ContactsConfigureArgs {
+    #[arg(long)]
+    pub source_container: String,
+    #[arg(long)]
+    pub personal_account: String,
+    #[arg(long)]
+    pub workspace_account: String,
+    #[arg(long = "work-domain", required = true)]
+    pub work_domains: Vec<String>,
+}
+
+#[derive(Args)]
+pub(crate) struct ContactsPublishArgs {
+    #[arg(long)]
+    pub apply: bool,
+    #[arg(long, requires = "apply")]
+    pub allow_large_delete: bool,
 }
 
 #[derive(Subcommand)]
@@ -129,6 +161,22 @@ pub(crate) enum AuthCommand {
     Gmail {
         #[command(subcommand)]
         command: GmailCommand,
+    },
+    Contacts {
+        #[command(subcommand)]
+        command: ContactsAuthCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ContactsAuthCommand {
+    Add {
+        #[arg(long)]
+        credentials: Option<PathBuf>,
+    },
+    List,
+    Remove {
+        account: String,
     },
 }
 

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -13,6 +14,8 @@ pub struct Config {
     pub ollama: OllamaConfig,
     #[serde(default)]
     pub gmail: GmailConfig,
+    #[serde(default)]
+    pub contact_publish: ContactPublishConfig,
     #[serde(default)]
     pub paths: SourcePaths,
 }
@@ -40,6 +43,20 @@ pub struct GmailConfig {
     pub credentials_path: Option<PathBuf>,
     #[serde(default)]
     pub accounts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ContactPublishConfig {
+    pub credentials_path: Option<PathBuf>,
+    #[serde(default)]
+    pub account_credentials: BTreeMap<String, PathBuf>,
+    #[serde(default)]
+    pub accounts: Vec<String>,
+    pub source_container: Option<String>,
+    pub personal_account: Option<String>,
+    pub workspace_account: Option<String>,
+    #[serde(default)]
+    pub work_domains: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -76,6 +93,7 @@ impl Config {
             },
             ollama: OllamaConfig::default(),
             gmail: GmailConfig::default(),
+            contact_publish: ContactPublishConfig::default(),
             paths: SourcePaths::discover()?,
         })
     }

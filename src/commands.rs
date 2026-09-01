@@ -49,6 +49,7 @@ pub(crate) fn run(format: Format, config: Option<PathBuf>, command: Command) -> 
         Command::Graph(args) => crate::analytics_commands::graph(format, config_path, args),
         Command::Face { command } => crate::face_commands::run(format, command),
         Command::Photos { command } => crate::photos_commands::run(format, config_path, command),
+        Command::Contacts { command } => crate::contact_commands::run(format, config_path, command),
         Command::Auth { command } => crate::auth_commands::run(format, config_path, command),
     }
 }

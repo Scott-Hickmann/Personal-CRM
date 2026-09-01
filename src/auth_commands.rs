@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::cli::{AuthCommand, GmailCommand};
+use crate::cli::{AuthCommand, ContactsAuthCommand, GmailCommand};
 use crate::config::Config;
 use crate::error::{CrmError, Result};
 use crate::gmail;
@@ -34,6 +34,34 @@ pub(crate) fn run(format: Format, config_path: PathBuf, command: AuthCommand) ->
                 "auth.gmail.remove",
                 serde_json::json!({"account": account}),
                 "Gmail account removed".into(),
+            )
+        }
+        AuthCommand::Contacts {
+            command: ContactsAuthCommand::Add { credentials },
+        } => {
+            let account = crate::google_contacts::authorize(
+                &mut config,
+                &config_path,
+                credentials.as_deref(),
+            )?;
+            let table = format!("authorized  {}", account.email);
+            output::emit(format, "auth.contacts.add", &account, table)
+        }
+        AuthCommand::Contacts {
+            command: ContactsAuthCommand::List,
+        } => {
+            let accounts = crate::google_contacts::list_accounts(&config);
+            output::emit(format, "auth.contacts.list", accounts, accounts.join("\n"))
+        }
+        AuthCommand::Contacts {
+            command: ContactsAuthCommand::Remove { account },
+        } => {
+            crate::google_contacts::remove_account(&mut config, &config_path, &account)?;
+            output::emit(
+                format,
+                "auth.contacts.remove",
+                serde_json::json!({"account": account}),
+                "Google Contacts account removed".into(),
             )
         }
     }
