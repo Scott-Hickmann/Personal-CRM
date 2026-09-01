@@ -57,15 +57,7 @@ pub fn containers(configured: &Path) -> Result<Vec<AppleContainer>> {
 }
 
 pub fn contacts(configured: &Path, container_id: &str) -> Result<Vec<AppleContact>> {
-    let path = database_paths(configured)?
-        .into_iter()
-        .find(|(id, _)| id == container_id)
-        .map(|(_, path)| path)
-        .ok_or_else(|| {
-            CrmError::Contacts(format!(
-                "configured contact container {container_id} was not found"
-            ))
-        })?;
+    let path = container_path(configured, container_id)?;
     let source = ReadOnlySource::open(&path)?;
     source.require_columns(
         "ZABCDRECORD",
@@ -128,6 +120,23 @@ pub fn contacts(configured: &Path, container_id: &str) -> Result<Vec<AppleContac
             Ok(contact)
         })
         .collect()
+}
+
+pub fn container_path(configured: &Path, container_id: &str) -> Result<PathBuf> {
+    database_paths(configured)?
+        .into_iter()
+        .find(|(id, _)| id == container_id)
+        .map(|(_, path)| path)
+        .ok_or_else(|| {
+            CrmError::Contacts(format!(
+                "configured contact container {container_id} was not found"
+            ))
+        })
+}
+
+pub fn schema_fingerprint(configured: &Path, container_id: &str) -> Result<String> {
+    let source = ReadOnlySource::open(&container_path(configured, container_id)?)?;
+    source.schema_fingerprint()
 }
 
 fn labeled_values(

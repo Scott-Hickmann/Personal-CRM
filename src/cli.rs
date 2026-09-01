@@ -26,6 +26,7 @@ pub(crate) enum Command {
     },
     Doctor,
     Status,
+    Review(ReviewArgs),
     Person {
         #[command(subcommand)]
         command: PersonCommand,
@@ -156,6 +157,17 @@ pub(crate) struct GraphArgs {
     pub min_confidence: f64,
 }
 
+#[derive(Args)]
+pub(crate) struct ReviewArgs {
+    pub id: Option<String>,
+    #[arg(long, conflicts_with_all = ["approve", "reject"])]
+    pub link_icloud: Option<String>,
+    #[arg(long, conflicts_with = "reject")]
+    pub approve: bool,
+    #[arg(long)]
+    pub reject: bool,
+}
+
 #[derive(Subcommand)]
 pub(crate) enum AuthCommand {
     Gmail {
@@ -226,7 +238,6 @@ pub(crate) struct InitArgs {
 
 #[derive(Subcommand)]
 pub(crate) enum PersonCommand {
-    Add(PersonAddArgs),
     Show(PersonReference),
 }
 
@@ -243,14 +254,6 @@ pub(crate) enum FactCommand {
 #[derive(Subcommand)]
 pub(crate) enum TagCommand {
     Add(TagAddArgs),
-}
-
-#[derive(Args)]
-pub(crate) struct PersonAddArgs {
-    #[arg(long)]
-    pub name: String,
-    #[arg(long)]
-    pub dry_run: bool,
 }
 
 #[derive(Args)]

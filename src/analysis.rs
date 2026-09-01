@@ -204,8 +204,9 @@ fn persist(
 
 fn source_people(connection: &Connection, interaction_id: &str) -> Result<Vec<String>> {
     let mut statement = connection.prepare(
-        "SELECT DISTINCT ip.person_id FROM interaction_participants ip
+        "SELECT DISTINCT ip.person_id FROM interaction_participants ip JOIN people p ON p.id=ip.person_id
          WHERE ip.interaction_id=?1 AND ip.person_id IS NOT NULL
+         AND p.lifecycle_state='active'
          AND NOT EXISTS (SELECT 1 FROM identities x WHERE x.person_id=ip.person_id AND x.is_self=1)",
     )?;
     Ok(statement

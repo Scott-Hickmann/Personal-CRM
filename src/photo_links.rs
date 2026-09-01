@@ -44,7 +44,7 @@ pub(crate) fn review_people(
                 l.selected_face_index, l.selected_face_bounds_json, l.source_sha256, l.state
          FROM people p
          LEFT JOIN photo_links l ON l.person_id = p.id
-         WHERE (?1 IS NULL OR p.id = ?1)
+         WHERE p.lifecycle_state='active' AND (?1 IS NULL OR p.id = ?1)
          ORDER BY CASE COALESCE(l.state, 'pending')
                     WHEN 'pending' THEN 0 WHEN 'deferred' THEN 1 ELSE 2 END,
                   COALESCE(p.affinity_score, -1) DESC, p.display_name COLLATE NOCASE",
@@ -215,7 +215,8 @@ mod tests {
         let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
         connection
             .execute(
-                "INSERT INTO people(id, display_name) VALUES ('p1', 'Ada')",
+                "INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state)
+                 VALUES ('p1', 'Ada', 'apple-1', 'active')",
                 [],
             )
             .unwrap();
@@ -242,7 +243,9 @@ mod tests {
         let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
         connection
             .execute(
-                "INSERT INTO people(id, display_name) VALUES ('p1', 'Ada'), ('p2', 'Grace')",
+                "INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state)
+                 VALUES ('p1', 'Ada', 'apple-1', 'active'),
+                        ('p2', 'Grace', 'apple-2', 'active')",
                 [],
             )
             .unwrap();
@@ -265,7 +268,8 @@ mod tests {
         let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
         connection
             .execute(
-                "INSERT INTO people(id, display_name) VALUES ('p1', 'Ada')",
+                "INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state)
+                 VALUES ('p1', 'Ada', 'apple-1', 'active')",
                 [],
             )
             .unwrap();

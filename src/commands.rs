@@ -37,6 +37,7 @@ pub(crate) fn run(format: Format, config: Option<PathBuf>, command: Command) -> 
         } => show_config(format, config_path),
         Command::Doctor => doctor(format, config_path),
         Command::Status => status(format, config_path),
+        Command::Review(args) => crate::review_commands::run(format, config_path, args),
         Command::Person { command } => person(format, config_path, command),
         Command::Note { command } => note(format, config_path, command),
         Command::Fact { command } => fact(format, config_path, command),
@@ -112,15 +113,6 @@ fn init(format: Format, config_path: PathBuf, args: InitArgs) -> Result<()> {
 fn person(format: Format, config_path: PathBuf, command: PersonCommand) -> Result<()> {
     let connection = open_database(&config_path)?;
     match command {
-        PersonCommand::Add(args) => {
-            let result = repository::create_person(&connection, &args.name, args.dry_run)?;
-            output::emit(
-                format,
-                "person.add",
-                &result,
-                format!("{}  {}", result.person_id, args.name),
-            )
-        }
         PersonCommand::Show(args) => {
             let result = repository::get_person(&connection, &args.person)?;
             let table = format!(

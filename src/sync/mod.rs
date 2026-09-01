@@ -154,7 +154,8 @@ fn add_participant(
     let normalized = crate::repository::normalize_identity("contact", identity);
     let person_id: Option<String> = crm
         .query_row(
-            "SELECT person_id FROM identities WHERE normalized_value = ?1 LIMIT 1",
+            "SELECT i.person_id FROM identities i JOIN people p ON p.id=i.person_id
+             WHERE i.normalized_value=?1 AND i.active=1 AND p.lifecycle_state='active' LIMIT 1",
             [normalized],
             |row| row.get(0),
         )
@@ -164,4 +165,36 @@ fn add_participant(
         params![interaction_id, person_id, identity, role],
     )?;
     Ok(())
+}
+
+pub(crate) fn rebind_unresolved_participants(crm: &Connection) -> Result<usize> {
+    let mut statement = crm.prepare(
+        "SELECT interaction_id, identity_value, role FROM interaction_participants
+         WHERE person_id IS NULL AND identity_value IS NOT NULL",
+    )?;
+    let rows: Vec<(String, String, String)> = statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .collect::<std::result::Result<_, _>>()?;
+    drop(statement);
+    let mut rebound = 0;
+    for (interaction_id, identity, role) in rows {
+        let normalized = crate::repository::normalize_identity("contact", &identity);
+        let person_id: Option<String> = crm
+            .query_row(
+                "SELECT i.person_id FROM identities i JOIN people p ON p.id=i.person_id
+                 WHERE i.normalized_value=?1 AND i.active=1 AND p.lifecycle_state='active' LIMIT 1",
+                [normalized],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(person_id) = person_id {
+            crm.execute(
+                "UPDATE interaction_participants SET person_id=?4
+                 WHERE interaction_id=?1 AND identity_value=?2 AND role=?3",
+                params![interaction_id, identity, role, person_id],
+            )?;
+            rebound += 1;
+        }
+    }
+    Ok(rebound)
 }

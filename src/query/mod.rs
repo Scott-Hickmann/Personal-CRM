@@ -157,7 +157,7 @@ fn json_value(value: ValueRef<'_>) -> serde_json::Value {
 
 const PEOPLE: Specification = Specification {
     name: "people",
-    from: "people p",
+    from: "(SELECT * FROM people WHERE lifecycle_state='active') p",
     defaults: &[
         "id",
         "display_name",
@@ -172,6 +172,8 @@ const PEOPLE: Specification = Specification {
         ("affinity_score", "p.affinity_score"),
         ("affinity_tier", "p.affinity_tier"),
         ("activity_state", "p.activity_state"),
+        ("apple_contact_id", "p.apple_contact_id"),
+        ("lifecycle_state", "p.lifecycle_state"),
         (
             "is_self",
             "EXISTS(SELECT 1 FROM identities self_identity WHERE self_identity.person_id=p.id AND self_identity.is_self=1)",

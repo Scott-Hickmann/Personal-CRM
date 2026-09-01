@@ -27,7 +27,7 @@ pub struct Components {
 
 pub fn recalculate_all(connection: &Connection) -> Result<usize> {
     let mut statement = connection.prepare(
-        "SELECT id FROM people p WHERE NOT EXISTS
+        "SELECT id FROM people p WHERE p.lifecycle_state='active' AND NOT EXISTS
          (SELECT 1 FROM identities i WHERE i.person_id=p.id AND i.is_self=1)",
     )?;
     let ids: Vec<String> = statement

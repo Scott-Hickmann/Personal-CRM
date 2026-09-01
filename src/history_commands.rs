@@ -111,7 +111,13 @@ mod tests {
     fn history_filters_channels_case_insensitively() {
         let directory = tempfile::tempdir().unwrap();
         let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
-        let person = repository::create_person(&connection, "Alex", false).unwrap();
+        connection
+            .execute(
+                "INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state)
+                 VALUES ('person', 'Alex', 'apple-alex', 'active')",
+                [],
+            )
+            .unwrap();
         connection
             .execute("INSERT INTO sources(id, kind) VALUES ('test', 'test')", [])
             .unwrap();
@@ -124,10 +130,10 @@ mod tests {
             .execute(
                 "INSERT INTO interaction_participants(interaction_id, person_id, role)
              VALUES ('message', ?1, 'sender')",
-                [&person.person_id],
+                ["person"],
             )
             .unwrap();
-        let items = collect(&connection, &person.person_id, Some("imessage"), 10).unwrap();
+        let items = collect(&connection, "person", Some("imessage"), 10).unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].body.as_deref(), Some("hello"));
     }

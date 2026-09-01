@@ -9,6 +9,8 @@ use crate::error::{CrmError, Result};
 pub struct Person {
     pub id: String,
     pub display_name: String,
+    pub apple_contact_id: Option<String>,
+    pub lifecycle_state: String,
     pub affinity_score: Option<f64>,
     pub affinity_tier: Option<String>,
     pub activity_state: Option<String>,
@@ -56,9 +58,9 @@ pub fn ensure_self(connection: &Connection, identity: &SelfIdentity) -> Result<S
         .optional()?
         .unwrap_or_else(|| Uuid::new_v4().to_string());
     connection.execute(
-        "INSERT INTO people(id, display_name) VALUES (?1, ?2)
+        "INSERT INTO people(id, display_name, apple_contact_id) VALUES (?1, ?2, ?3)
          ON CONFLICT(id) DO UPDATE SET display_name = excluded.display_name, updated_at = CURRENT_TIMESTAMP",
-        params![person_id, identity.name],
+        params![person_id, identity.name, identity.apple_contact_id],
     )?;
     for email in &identity.emails {
         upsert_identity(connection, &person_id, "email", email, true)?;
@@ -72,32 +74,6 @@ pub fn ensure_self(connection: &Connection, identity: &SelfIdentity) -> Result<S
     Ok(person_id)
 }
 
-pub fn create_person(
-    connection: &Connection,
-    name: &str,
-    dry_run: bool,
-) -> Result<MutationPreview> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Err(CrmError::InvalidConfig(
-            "person name cannot be empty".into(),
-        ));
-    }
-    let id = Uuid::new_v4().to_string();
-    if !dry_run {
-        connection.execute(
-            "INSERT INTO people(id, display_name) VALUES (?1, ?2)",
-            params![id, name],
-        )?;
-    }
-    Ok(MutationPreview {
-        operation: "person.add".into(),
-        person_id: id,
-        value: serde_json::json!({"display_name": name}),
-        dry_run,
-    })
-}
-
 pub fn resolve_person_id(connection: &Connection, reference: &str) -> Result<String> {
     if let Some(id) = connection
         .query_row("SELECT id FROM people WHERE id = ?1", [reference], |row| {
@@ -108,7 +84,8 @@ pub fn resolve_person_id(connection: &Connection, reference: &str) -> Result<Str
         return Ok(id);
     }
     let mut statement = connection.prepare(
-        "SELECT id FROM people WHERE display_name LIKE ?1 COLLATE NOCASE ORDER BY display_name LIMIT 2",
+        "SELECT id FROM people WHERE lifecycle_state != 'migration_pending'
+         AND display_name LIKE ?1 COLLATE NOCASE ORDER BY lifecycle_state, display_name LIMIT 2",
     )?;
     let pattern = format!("%{}%", reference.replace('%', "\\%").replace('_', "\\_"));
     let ids: Vec<String> = statement
@@ -124,17 +101,28 @@ pub fn resolve_person_id(connection: &Connection, reference: &str) -> Result<Str
 pub fn get_person(connection: &Connection, reference: &str) -> Result<Person> {
     let id = resolve_person_id(connection, reference)?;
     let mut person = connection.query_row(
-        "SELECT id, display_name, affinity_score, affinity_tier, activity_state FROM people WHERE id = ?1",
+        "SELECT id, display_name, apple_contact_id, lifecycle_state,
+                affinity_score, affinity_tier, activity_state FROM people WHERE id = ?1",
         [&id],
-        |row| Ok(Person {
-            id: row.get(0)?, display_name: row.get(1)?, affinity_score: row.get(2)?,
-            affinity_tier: row.get(3)?, activity_state: row.get(4)?, identities: Vec::new(),
-            notes: Vec::new(), facts: Vec::new(), tags: Vec::new(),
-        }),
+        |row| {
+            Ok(Person {
+                id: row.get(0)?,
+                display_name: row.get(1)?,
+                apple_contact_id: row.get(2)?,
+                lifecycle_state: row.get(3)?,
+                affinity_score: row.get(4)?,
+                affinity_tier: row.get(5)?,
+                activity_state: row.get(6)?,
+                identities: Vec::new(),
+                notes: Vec::new(),
+                facts: Vec::new(),
+                tags: Vec::new(),
+            })
+        },
     )?;
     person.identities = collect(
         connection,
-        "SELECT kind, value, is_self FROM identities WHERE person_id = ?1",
+        "SELECT kind, value, is_self FROM identities WHERE person_id = ?1 AND active=1",
         &id,
         |row| {
             Ok(Identity {
@@ -248,12 +236,37 @@ pub(crate) fn upsert_identity(
     is_self: bool,
 ) -> Result<()> {
     let normalized = normalize_identity(kind, value);
-    connection.execute(
-        "INSERT INTO identities(id, person_id, kind, value, normalized_value, is_self)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-         ON CONFLICT(kind, normalized_value) DO UPDATE SET person_id = excluded.person_id, value = excluded.value, is_self = MAX(is_self, excluded.is_self)",
-        params![Uuid::new_v4().to_string(), person_id, kind, value, normalized, is_self as i64],
-    )?;
+    let owner: Option<String> = connection
+        .query_row(
+            "SELECT person_id FROM identities WHERE kind=?1 AND normalized_value=?2 AND active=1",
+            params![kind, normalized],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if owner.as_deref().is_some_and(|owner| owner != person_id) {
+        return Err(CrmError::Contacts(format!(
+            "identity {value} is already assigned to another active iCloud contact"
+        )));
+    }
+    if let Some(id) = connection
+        .query_row(
+            "SELECT id FROM identities WHERE person_id=?1 AND kind=?2 AND normalized_value=?3 LIMIT 1",
+            params![person_id, kind, normalized],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+    {
+        connection.execute(
+            "UPDATE identities SET value=?2, is_self=MAX(is_self, ?3), active=1 WHERE id=?1",
+            params![id, value, is_self as i64],
+        )?;
+    } else {
+        connection.execute(
+            "INSERT INTO identities(id, person_id, kind, value, normalized_value, is_self, active)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)",
+            params![Uuid::new_v4().to_string(), person_id, kind, value, normalized, is_self as i64],
+        )?;
+    }
     Ok(())
 }
 

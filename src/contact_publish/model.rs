@@ -30,15 +30,11 @@ pub fn project(
     let mut desired = Vec::new();
     for contact in contacts {
         let emails = normalized_values(&contact.emails, ValueKind::Email);
-        if emails.is_empty() {
+        let phones = normalized_values(&contact.phones, ValueKind::Phone);
+        if !is_usable(&contact, &emails, &phones) {
             continue;
         }
-        desired.push(build(
-            &contact,
-            personal,
-            emails.clone(),
-            normalized_values(&contact.phones, ValueKind::Phone),
-        )?);
+        desired.push(build(&contact, personal, emails.clone(), phones.clone())?);
 
         let work_emails: Vec<_> = emails
             .iter()
@@ -67,6 +63,15 @@ pub fn project(
             .then(left.apple_id.cmp(&right.apple_id))
     });
     Ok(desired)
+}
+
+fn is_usable(contact: &AppleContact, emails: &[TypedValue], phones: &[TypedValue]) -> bool {
+    !emails.is_empty()
+        || !phones.is_empty()
+        || !contact.given_name.trim().is_empty()
+        || !contact.family_name.trim().is_empty()
+        || !contact.organization.trim().is_empty()
+        || !contact.nickname.trim().is_empty()
 }
 
 fn build(
@@ -277,7 +282,7 @@ mod tests {
     }
 
     #[test]
-    fn ignores_contacts_without_email() {
+    fn mirrors_phone_only_contact_to_personal() {
         let mut item = contact();
         item.emails.clear();
         let config = ContactPublishConfig {
@@ -286,7 +291,10 @@ mod tests {
             work_domains: vec!["example.com".into()],
             ..ContactPublishConfig::default()
         };
-        assert!(project(vec![item], &config).unwrap().is_empty());
+        let desired = project(vec![item], &config).unwrap();
+        assert_eq!(desired.len(), 1);
+        assert_eq!(desired[0].account, "personal@example.net");
+        assert_eq!(desired[0].person.phone_numbers.len(), 2);
     }
 
     #[test]
