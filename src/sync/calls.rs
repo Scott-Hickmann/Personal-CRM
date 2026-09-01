@@ -20,11 +20,12 @@ fn sync_apple(config: &crate::config::Config, crm: &Connection) -> Result<SyncRe
         "calls",
         path,
         "ZCALLRECORD",
-        &["Z_PK", "ZDATE", "ZDURATION", "ZADDRESS"],
+        &["Z_PK", "ZDATE", "ZDURATION", "ZADDRESS", "ZNAME"],
     )?;
     let mut statement = source.connection().prepare(
         "SELECT Z_PK, COALESCE(ZUNIQUE_ID, 'pk:' || Z_PK), datetime(ZDATE + 978307200, 'unixepoch'),
-                ZDURATION, ZADDRESS, ZORIGINATED, ZANSWERED, ZCALLTYPE, ZSERVICE_PROVIDER
+                ZDURATION, ZADDRESS, ZORIGINATED, ZANSWERED, ZCALLTYPE, ZSERVICE_PROVIDER,
+                ZNAME
          FROM ZCALLRECORD WHERE ZDATE IS NOT NULL",
     )?;
     let mut imported = HashSet::new();
@@ -54,6 +55,7 @@ fn sync_apple(config: &crate::config::Config, crm: &Connection) -> Result<SyncRe
                 crm,
                 &interaction_id,
                 &identity,
+                row.get::<_, Option<String>>(9)?.as_deref(),
                 if originated { "recipient" } else { "caller" },
             )?;
         }
@@ -107,7 +109,7 @@ fn sync_whatsapp(config: &crate::config::Config, crm: &Connection) -> Result<Syn
             &run_at,
         )?;
         if let Some(identity) = row.get::<_, Option<String>>(5)? {
-            add_participant(crm, &interaction_id, &identity, "participant")?;
+            add_participant(crm, &interaction_id, &identity, None, "participant")?;
         }
     }
     let deleted = finish_source(crm, "whatsapp_calls", &run_at)?;

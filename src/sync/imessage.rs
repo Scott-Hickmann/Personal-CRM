@@ -21,11 +21,15 @@ pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncRepo
     let mut statement = source.connection().prepare(
         "SELECT m.guid, COALESCE(c.guid, c.chat_identifier), COALESCE(m.service, 'iMessage'),
                 datetime((m.date / 1000000000) + 978307200, 'unixepoch'), m.is_from_me,
-                m.subject, m.text, h.id, m.cache_has_attachments
+                m.subject, m.text, h.id, m.cache_has_attachments,
+                CASE WHEN participants.handle_count = 1 THEN NULLIF(c.display_name, '') END
          FROM message m
          LEFT JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
          LEFT JOIN chat c ON c.ROWID = cmj.chat_id
          LEFT JOIN handle h ON h.ROWID = m.handle_id
+         LEFT JOIN (
+             SELECT chat_id, COUNT(*) AS handle_count FROM chat_handle_join GROUP BY chat_id
+         ) participants ON participants.chat_id = c.ROWID
          WHERE m.guid IS NOT NULL AND m.date IS NOT NULL AND m.is_system_message = 0",
     )?;
     let mut imported = HashSet::new();
@@ -54,6 +58,7 @@ pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncRepo
                 crm,
                 &interaction_id,
                 &identity,
+                row.get::<_, Option<String>>(9)?.as_deref(),
                 if from_me { "recipient" } else { "sender" },
             )?;
         }

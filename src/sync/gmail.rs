@@ -220,6 +220,7 @@ fn import_message(
                 crm,
                 &interaction_id,
                 &email,
+                None,
                 if outgoing {
                     "recipient"
                 } else {

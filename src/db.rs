@@ -13,6 +13,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (4, include_str!("../migrations/004_photos.sql")),
     (5, include_str!("../migrations/005_contact_publish.sql")),
     (6, include_str!("../migrations/006_authority.sql")),
+    (7, include_str!("../migrations/007_participant_names.sql")),
 ];
 
 pub fn open(path: &Path) -> Result<Connection> {
@@ -76,6 +77,6 @@ mod tests {
         let path = directory.path().join("crm.sqlite3");
         drop(open(&path).unwrap());
         let connection = open(&path).unwrap();
-        assert_eq!(schema_version(&connection).unwrap(), 6);
+        assert_eq!(schema_version(&connection).unwrap(), 7);
     }
 }

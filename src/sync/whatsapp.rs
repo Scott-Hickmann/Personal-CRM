@@ -18,10 +18,14 @@ pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncRepo
         "ZWAMESSAGE",
         &["Z_PK", "ZMESSAGEDATE", "ZISFROMME", "ZTEXT"],
     )?;
+    source.require_columns("ZWAPROFILEPUSHNAME", &["ZJID", "ZPUSHNAME"])?;
     let mut statement = source.connection().prepare(
         "SELECT m.Z_PK, m.ZSTANZAID, s.ZCONTACTJID, datetime(m.ZMESSAGEDATE + 978307200, 'unixepoch'),
-                m.ZISFROMME, m.ZTEXT, m.ZFROMJID, m.ZTOJID, m.ZMESSAGETYPE
+                m.ZISFROMME, m.ZTEXT, m.ZFROMJID, m.ZTOJID, m.ZMESSAGETYPE,
+                profile.ZPUSHNAME, m.ZPUSHNAME, s.ZPARTNERNAME
          FROM ZWAMESSAGE m LEFT JOIN ZWACHATSESSION s ON s.Z_PK = m.ZCHATSESSION
+         LEFT JOIN ZWAPROFILEPUSHNAME profile
+           ON profile.ZJID = CASE WHEN m.ZISFROMME = 1 THEN m.ZTOJID ELSE m.ZFROMJID END
          WHERE m.ZMESSAGEDATE IS NOT NULL",
     )?;
     let mut imported = HashSet::new();
@@ -35,6 +39,14 @@ pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncRepo
         let from_me = row.get::<_, i64>(4)? != 0;
         let sender: Option<String> = row.get(6)?;
         let recipient: Option<String> = row.get(7)?;
+        let profile_name: Option<String> = row.get(9)?;
+        let push_name: Option<String> = row.get(10)?;
+        let partner_name: Option<String> = row.get(11)?;
+        let display_name = if from_me {
+            profile_name.or(partner_name)
+        } else {
+            profile_name.or(push_name).or(partner_name)
+        };
         let interaction_id = upsert_interaction(
             crm,
             "whatsapp",
@@ -54,6 +66,7 @@ pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncRepo
                 crm,
                 &interaction_id,
                 &identity,
+                display_name.as_deref(),
                 if from_me { "recipient" } else { "sender" },
             )?;
         }

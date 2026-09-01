@@ -7,6 +7,7 @@ mod whatsapp;
 
 use std::path::Path;
 
+use base64::Engine as _;
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
@@ -148,9 +149,11 @@ fn add_participant(
     crm: &Connection,
     interaction_id: &str,
     identity: &str,
+    display_name: Option<&str>,
     role: &str,
 ) -> Result<()> {
     let normalized = crate::repository::normalize_observed_identity(identity);
+    let display_name = usable_display_name(identity, display_name);
     let person_id: Option<String> = crm
         .query_row(
             "SELECT i.person_id FROM identities i JOIN people p ON p.id=i.person_id
@@ -160,10 +163,35 @@ fn add_participant(
         )
         .optional()?;
     crm.execute(
-        "INSERT OR REPLACE INTO interaction_participants(interaction_id, person_id, identity_value, role) VALUES (?1, ?2, ?3, ?4)",
-        params![interaction_id, person_id, identity, role],
+        "INSERT OR REPLACE INTO interaction_participants(
+             interaction_id, person_id, identity_value, display_name, role
+         ) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![interaction_id, person_id, identity, display_name, role],
     )?;
     Ok(())
+}
+
+fn usable_display_name<'a>(identity: &str, name: Option<&'a str>) -> Option<&'a str> {
+    let name = name.map(str::trim).filter(|name| !name.is_empty())?;
+    if !name.chars().any(char::is_alphabetic)
+        || crate::repository::normalize_observed_identity(name)
+            == crate::repository::normalize_observed_identity(identity)
+        || looks_encoded_name(name)
+    {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+fn looks_encoded_name(value: &str) -> bool {
+    base64::engine::general_purpose::STANDARD
+        .decode(value)
+        .is_ok_and(|decoded| {
+            decoded
+                .iter()
+                .any(|byte| *byte == 0 || (*byte < b' ' && !matches!(*byte, b'\t' | b'\n' | b'\r')))
+        })
 }
 
 pub(crate) fn rebind_unresolved_participants(crm: &Connection) -> Result<usize> {
@@ -196,4 +224,24 @@ pub(crate) fn rebind_unresolved_participants(crm: &Connection) -> Result<usize> 
         }
     }
     Ok(rebound)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_human_source_names() {
+        assert_eq!(
+            usable_display_name("+15550100", Some(" Alex Example ")),
+            Some("Alex Example")
+        );
+    }
+
+    #[test]
+    fn rejects_encoded_or_numeric_source_names() {
+        assert_eq!(usable_display_name("+15550100", Some("IAA=")), None);
+        assert_eq!(usable_display_name("+15550100", Some("IABoAXAB")), None);
+        assert_eq!(usable_display_name("+15550100", Some("15550100")), None);
+    }
 }
