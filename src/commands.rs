@@ -143,6 +143,16 @@ fn person(format: Format, config_path: PathBuf, command: PersonCommand) -> Resul
             );
             output::emit(format, "person.show", &result, table)
         }
+        PersonCommand::Delete(args) => {
+            let person_id =
+                crate::person_cleanup::delete_retired_person(&connection, &args.person)?;
+            output::emit(
+                format,
+                "person.delete",
+                serde_json::json!({"person_id": person_id}),
+                format!("deleted retired person {person_id}"),
+            )
+        }
     }
 }
 

@@ -121,13 +121,14 @@ Analysis sends bounded batches only to the configured local Ollama server. The e
 
 ```sh
 crm person show "Alex"
+crm person delete RETIRED-PERSON-ID
 crm history "Alex" --channel whatsapp --limit 50
 crm note add --person "Alex" --text "Met through Sam"
 crm fact set --person "Alex" --key "birthday" --value "May 4"
 crm tag add --person "Alex" --tag "climbing"
 ```
 
-People cannot be created directly in CRM. Unmanaged Google Contacts and unresolved WhatsApp or Gmail identities become contact candidates in `crm review`; each suggestion shows its source, and approval creates the iCloud contact first. SMS, RCS, iMessage, Apple Calls, WhatsApp groups, and identities already present on an active iCloud contact are excluded. Notes, facts, and tags support `--dry-run`. Partial names are accepted only when they resolve to exactly one active or retired person.
+People cannot be created directly in CRM. Unmanaged Google Contacts and unresolved WhatsApp or Gmail identities become contact candidates in `crm review`; each suggestion shows its source, and approval creates the iCloud contact first. SMS, RCS, iMessage, Apple Calls, WhatsApp groups, and identities already present on an active iCloud contact are excluded. Notes, facts, and tags support `--dry-run`. Partial names are accepted only when they resolve to exactly one active or retired person. `person delete` is restricted to retired, non-self people and preserves shared source interactions as unassigned.
 
 ## Match a face from Photos
 

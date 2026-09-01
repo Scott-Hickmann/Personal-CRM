@@ -233,6 +233,7 @@ pub(crate) struct InitArgs {
 #[derive(Subcommand)]
 pub(crate) enum PersonCommand {
     Show(PersonReference),
+    Delete(PersonReference),
 }
 
 #[derive(Subcommand)]

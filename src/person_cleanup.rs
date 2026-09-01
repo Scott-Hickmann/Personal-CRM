@@ -1,6 +1,7 @@
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::error::{CrmError, Result};
+use crate::repository;
 
 pub fn delete_review_person(connection: &Connection, review_id: &str) -> Result<String> {
     let (kind, person_id): (String, String) = connection
@@ -31,9 +32,30 @@ pub fn delete_review_person(connection: &Connection, review_id: &str) -> Result<
             "only migration-pending people can be deleted from review".into(),
         ));
     }
+    delete_person(connection, &person_id)?;
+    Ok(person_id)
+}
+
+pub fn delete_retired_person(connection: &Connection, reference: &str) -> Result<String> {
+    let person_id = repository::resolve_person_id(connection, reference)?;
+    let lifecycle: String = connection.query_row(
+        "SELECT lifecycle_state FROM people WHERE id=?1",
+        [&person_id],
+        |row| row.get(0),
+    )?;
+    if lifecycle != "retired" {
+        return Err(CrmError::InvalidConfig(
+            "only retired people can be deleted directly".into(),
+        ));
+    }
+    delete_person(connection, &person_id)?;
+    Ok(person_id)
+}
+
+fn delete_person(connection: &Connection, person_id: &str) -> Result<()> {
     let is_self: bool = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM identities WHERE person_id=?1 AND is_self=1)",
-        [&person_id],
+        [person_id],
         |row| row.get(0),
     )?;
     if is_self {
@@ -45,27 +67,24 @@ pub fn delete_review_person(connection: &Connection, review_id: &str) -> Result<
     let transaction = connection.unchecked_transaction()?;
     transaction.execute(
         "UPDATE interaction_participants SET person_id=NULL WHERE person_id=?1",
-        [&person_id],
+        [person_id],
     )?;
     transaction.execute(
         "UPDATE mentions SET person_id=NULL, status='unresolved' WHERE person_id=?1",
-        [&person_id],
+        [person_id],
     )?;
     transaction.execute(
         "DELETE FROM relationships WHERE source_person_id=?1 OR target_person_id=?1",
-        [&person_id],
+        [person_id],
     )?;
     transaction.execute(
         "DELETE FROM identity_candidates WHERE candidate_person_id=?1",
-        [&person_id],
+        [person_id],
     )?;
-    transaction.execute(
-        "DELETE FROM review_items WHERE id=?1 OR subject_key=?2",
-        [review_id, &person_id],
-    )?;
-    transaction.execute("DELETE FROM people WHERE id=?1", [&person_id])?;
+    transaction.execute("DELETE FROM review_items WHERE subject_key=?1", [person_id])?;
+    transaction.execute("DELETE FROM people WHERE id=?1", [person_id])?;
     transaction.commit()?;
-    Ok(person_id)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -161,5 +180,41 @@ mod tests {
             })
             .unwrap();
         assert_eq!(people, 1);
+    }
+
+    #[test]
+    fn deletes_a_retired_person_by_id() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state)
+                 VALUES ('retired', 'Alex', 'apple-1', 'retired')",
+                [],
+            )
+            .unwrap();
+
+        let person_id = delete_retired_person(&connection, "retired").unwrap();
+
+        assert_eq!(person_id, "retired");
+        assert!(repository::get_person(&connection, "retired").is_err());
+    }
+
+    #[test]
+    fn direct_delete_refuses_an_active_person() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state)
+                 VALUES ('active', 'Alex', 'apple-1', 'active')",
+                [],
+            )
+            .unwrap();
+
+        let error = delete_retired_person(&connection, "active").unwrap_err();
+
+        assert!(error.to_string().contains("only retired"));
+        assert!(repository::get_person(&connection, "active").is_ok());
     }
 }

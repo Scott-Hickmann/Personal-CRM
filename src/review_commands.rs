@@ -33,7 +33,7 @@ pub fn run(format: Format, config_path: PathBuf, args: ReviewArgs) -> Result<()>
         return output::emit(format, "review", &items, table);
     };
     if args.delete_person {
-        let person_id = crate::migration_cleanup::delete_review_person(&connection, id)?;
+        let person_id = crate::person_cleanup::delete_review_person(&connection, id)?;
         return output::emit(
             format,
             "review.delete_person",
