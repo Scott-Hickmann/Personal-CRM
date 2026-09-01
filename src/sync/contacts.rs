@@ -25,7 +25,7 @@ pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncRepo
         .into_iter()
         .find(|item| item.id == container)
         .ok_or_else(|| CrmError::Contacts("authoritative iCloud container was not found".into()))?;
-    if !selected.kind.to_lowercase().contains("icloud") {
+    if !apple::is_icloud(&selected) {
         return Err(CrmError::Contacts(
             "the authoritative contact container is not an iCloud account".into(),
         ));

@@ -62,14 +62,14 @@ fn configure(format: Format, config_path: PathBuf, args: ContactsConfigureArgs) 
     let containers = apple::containers(contacts_path(&config)?)?;
     let selected = containers
         .iter()
-        .find(|item| item.id == args.source_container);
-    if selected.is_none() {
-        return Err(CrmError::Contacts(format!(
-            "contact container {} was not found",
-            args.source_container
-        )));
-    }
-    if !selected.unwrap().kind.to_lowercase().contains("icloud") {
+        .find(|item| item.id == args.source_container)
+        .ok_or_else(|| {
+            CrmError::Contacts(format!(
+                "contact container {} was not found",
+                args.source_container
+            ))
+        })?;
+    if !apple::is_icloud(selected) {
         return Err(CrmError::Contacts(
             "the authoritative contact container must be an iCloud account".into(),
         ));

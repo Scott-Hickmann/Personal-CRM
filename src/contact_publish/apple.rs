@@ -17,6 +17,11 @@ pub struct AppleContainer {
     pub kind: String,
 }
 
+pub fn is_icloud(container: &AppleContainer) -> bool {
+    container.name.eq_ignore_ascii_case("icloud")
+        || container.kind.to_lowercase().contains("icloud")
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppleContact {
@@ -285,6 +290,45 @@ fn account_metadata() -> Result<HashMap<String, AccountMetadata>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recognizes_icloud_carddav_container() {
+        let container = AppleContainer {
+            id: "icloud-account".into(),
+            name: "iCloud".into(),
+            kind: "com.apple.account.CardDAV".into(),
+        };
+
+        assert!(is_icloud(&container));
+    }
+
+    #[test]
+    fn rejects_non_icloud_contact_containers() {
+        let local = AppleContainer {
+            id: "local".into(),
+            name: "On My Mac".into(),
+            kind: "local".into(),
+        };
+        let other_carddav = AppleContainer {
+            id: "other-account".into(),
+            name: "Fastmail".into(),
+            kind: "com.apple.account.CardDAV".into(),
+        };
+
+        assert!(!is_icloud(&local));
+        assert!(!is_icloud(&other_carddav));
+    }
+
+    #[test]
+    fn recognizes_icloud_account_type() {
+        let container = AppleContainer {
+            id: "icloud-account".into(),
+            name: "Contacts".into(),
+            kind: "com.apple.account.iCloud".into(),
+        };
+
+        assert!(is_icloud(&container));
+    }
 
     #[test]
     fn exports_labeled_contact_fields_from_read_only_database() {
