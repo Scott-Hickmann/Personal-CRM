@@ -49,13 +49,33 @@ pub struct MutationPreview {
 }
 
 pub fn ensure_self(connection: &Connection, identity: &SelfIdentity) -> Result<String> {
-    let person_id = connection
-        .query_row(
-            "SELECT person_id FROM identities WHERE is_self = 1 LIMIT 1",
-            [],
-            |row| row.get(0),
-        )
-        .optional()?
+    let apple_person_id = identity
+        .apple_contact_id
+        .as_deref()
+        .map(|apple_id| {
+            connection
+                .query_row(
+                    "SELECT id FROM people WHERE apple_contact_id=?1",
+                    [apple_id],
+                    |row| row.get(0),
+                )
+                .optional()
+        })
+        .transpose()?
+        .flatten();
+    let person_id = apple_person_id
+        .or(connection
+            .query_row(
+                "SELECT i.person_id FROM identities i
+                 WHERE i.is_self=1 AND i.active=1
+                 AND NOT EXISTS (
+                     SELECT 1 FROM person_merges m WHERE m.source_person_id=i.person_id
+                 )
+                 LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?)
         .unwrap_or_else(|| Uuid::new_v4().to_string());
     connection.execute(
         "INSERT INTO people(id, display_name, apple_contact_id) VALUES (?1, ?2, ?3)
@@ -327,6 +347,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db;
 
     #[test]
     fn normalizes_observed_phone_and_whatsapp_identities() {
@@ -343,5 +364,46 @@ mod tests {
             normalize_observed_identity("Alex@Example.com"),
             "alex@example.com"
         );
+    }
+
+    #[test]
+    fn ensure_self_prefers_the_configured_icloud_person_over_a_merged_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO people(id, display_name) VALUES ('legacy', 'Alex');
+                 INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state)
+                 VALUES ('canonical', 'Alex', 'apple-1', 'active');
+                 INSERT INTO identities(
+                     id, person_id, kind, value, normalized_value, is_self, active
+                 ) VALUES (
+                     'identity', 'legacy', 'email', 'alex@example.com',
+                     'alex@example.com', 1, 0
+                 );
+                 INSERT INTO person_merges(source_person_id, target_person_id)
+                 VALUES ('legacy', 'canonical');",
+            )
+            .unwrap();
+        let identity = SelfIdentity {
+            name: "Alex".into(),
+            apple_contact_id: Some("apple-1".into()),
+            emails: vec!["alex@example.com".into()],
+            phones: Vec::new(),
+            whatsapp_ids: Vec::new(),
+        };
+
+        let person_id = ensure_self(&connection, &identity).unwrap();
+
+        assert_eq!(person_id, "canonical");
+        let owner: String = connection
+            .query_row(
+                "SELECT person_id FROM identities WHERE normalized_value='alex@example.com'
+                 AND active=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(owner, "canonical");
     }
 }

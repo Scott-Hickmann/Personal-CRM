@@ -127,18 +127,19 @@ pub fn link_migration_person(
             "--link-icloud is only valid for migration-person reviews".into(),
         ));
     }
-    if connection
+    if let Some(target_person_id) = connection
         .query_row(
             "SELECT id FROM people WHERE apple_contact_id=?1 AND id<>?2",
             params![apple_contact_id, person_id],
             |row| row.get::<_, String>(0),
         )
         .optional()?
-        .is_some()
     {
-        return Err(CrmError::Contacts(format!(
-            "iCloud contact {apple_contact_id} is already linked to another CRM person"
-        )));
+        let transaction = connection.unchecked_transaction()?;
+        merge_migration_shell(&transaction, &person_id, &target_person_id)?;
+        resolve(&transaction, review_id)?;
+        transaction.commit()?;
+        return Ok(target_person_id);
     }
     connection.execute(
         "UPDATE people SET apple_contact_id=?2, lifecycle_state='active', retired_at=NULL,
@@ -183,11 +184,62 @@ pub fn enqueue_unresolved_candidates(connection: &Connection) -> Result<usize> {
 
 pub fn pending_migration_count(connection: &Connection) -> Result<usize> {
     let count: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM people WHERE lifecycle_state='migration_pending'",
+        "SELECT COUNT(*) FROM people p WHERE lifecycle_state='migration_pending'
+         AND NOT EXISTS (SELECT 1 FROM person_merges m WHERE m.source_person_id=p.id)",
         [],
         |row| row.get(0),
     )?;
     Ok(count as usize)
+}
+
+fn merge_migration_shell(
+    connection: &Connection,
+    source_person_id: &str,
+    target_person_id: &str,
+) -> Result<()> {
+    let has_history: bool = connection.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM interaction_participants WHERE person_id=?1
+             UNION ALL SELECT 1 FROM notes WHERE person_id=?1
+             UNION ALL SELECT 1 FROM facts WHERE person_id=?1
+             UNION ALL SELECT 1 FROM tags WHERE person_id=?1
+             UNION ALL SELECT 1 FROM identity_candidates WHERE candidate_person_id=?1
+             UNION ALL SELECT 1 FROM important_dates WHERE person_id=?1
+             UNION ALL SELECT 1 FROM followups WHERE person_id=?1
+             UNION ALL SELECT 1 FROM cadences WHERE person_id=?1
+             UNION ALL SELECT 1 FROM relationships
+                 WHERE source_person_id=?1 OR target_person_id=?1
+             UNION ALL SELECT 1 FROM mentions WHERE person_id=?1
+             UNION ALL SELECT 1 FROM metrics WHERE person_id=?1
+             UNION ALL SELECT 1 FROM semantic_chunks WHERE person_id=?1
+             UNION ALL SELECT 1 FROM photo_links WHERE person_id=?1
+         )",
+        [source_person_id],
+        |row| row.get(0),
+    )?;
+    if has_history {
+        return Err(CrmError::Contacts(format!(
+            "CRM person {source_person_id} has history and cannot be merged automatically"
+        )));
+    }
+    connection.execute(
+        "INSERT INTO person_merges(source_person_id, target_person_id) VALUES (?1, ?2)",
+        params![source_person_id, target_person_id],
+    )?;
+    connection.execute(
+        "UPDATE identities SET active=0 WHERE person_id=?1",
+        [source_person_id],
+    )?;
+    connection.execute(
+        "UPDATE review_items SET status='resolved', resolved_at=CURRENT_TIMESTAMP,
+         updated_at=CURRENT_TIMESTAMP
+         WHERE kind='identity_collision' AND status='pending'
+         AND subject_key IN (
+             SELECT normalized_value FROM identities WHERE person_id=?1
+         )",
+        [source_person_id],
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -224,5 +276,94 @@ mod tests {
             .unwrap();
         assert_eq!(row, ("apple-1".into(), "active".into()));
         assert!(pending(&connection).unwrap().is_empty());
+    }
+
+    #[test]
+    fn migration_link_merges_empty_shell_into_existing_icloud_person() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO people(id, display_name) VALUES ('legacy', 'Alex');
+                 INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state)
+                 VALUES ('canonical', 'Alex', 'apple-1', 'active');
+                 INSERT INTO identities(
+                     id, person_id, kind, value, normalized_value, is_self, active
+                 ) VALUES (
+                     'identity', 'legacy', 'email', 'alex@example.com',
+                     'alex@example.com', 1, 1
+                 );",
+            )
+            .unwrap();
+        let migration_review = enqueue(
+            &connection,
+            "migration_person",
+            "legacy",
+            "Link Alex",
+            serde_json::json!({}),
+        )
+        .unwrap();
+        enqueue(
+            &connection,
+            "identity_collision",
+            "alex@example.com",
+            "Identity collision",
+            serde_json::json!({}),
+        )
+        .unwrap();
+
+        let person_id = link_migration_person(&connection, &migration_review, "apple-1").unwrap();
+
+        assert_eq!(person_id, "canonical");
+        let merge: String = connection
+            .query_row(
+                "SELECT target_person_id FROM person_merges WHERE source_person_id='legacy'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(merge, "canonical");
+        let active: bool = connection
+            .query_row(
+                "SELECT active FROM identities WHERE id='identity'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!active);
+        assert_eq!(pending_migration_count(&connection).unwrap(), 0);
+        assert!(pending(&connection).unwrap().is_empty());
+    }
+
+    #[test]
+    fn migration_link_does_not_merge_a_person_with_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO people(id, display_name) VALUES ('legacy', 'Alex');
+                 INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state)
+                 VALUES ('canonical', 'Alex', 'apple-1', 'active');
+                 INSERT INTO notes(id, person_id, body)
+                 VALUES ('note', 'legacy', 'Keep me');",
+            )
+            .unwrap();
+        let review_id = enqueue(
+            &connection,
+            "migration_person",
+            "legacy",
+            "Link Alex",
+            serde_json::json!({}),
+        )
+        .unwrap();
+
+        let error = link_migration_person(&connection, &review_id, "apple-1").unwrap_err();
+
+        assert!(error.to_string().contains("has history"));
+        let merges: i64 = connection
+            .query_row("SELECT COUNT(*) FROM person_merges", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(merges, 0);
+        assert_eq!(pending_migration_count(&connection).unwrap(), 1);
     }
 }

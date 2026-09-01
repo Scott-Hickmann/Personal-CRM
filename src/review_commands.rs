@@ -35,13 +35,22 @@ pub fn run(format: Format, config_path: PathBuf, args: ReviewArgs) -> Result<()>
     if let Some(apple_id) = args.link_icloud.as_deref() {
         let mut config = Config::load(&config_path)?;
         validate_icloud_contact(&config, apple_id)?;
+        let linked_self: bool = connection.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM identities i
+                 JOIN review_items r ON r.subject_key=i.person_id
+                 WHERE r.id=?1 AND i.is_self=1
+             )",
+            [id],
+            |row| row.get(0),
+        )?;
         let person_id = review::link_migration_person(&connection, id, apple_id)?;
         let is_self: bool = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM identities WHERE person_id=?1 AND is_self=1)",
             [&person_id],
             |row| row.get(0),
         )?;
-        if is_self {
+        if linked_self || is_self {
             config.self_identity.apple_contact_id = Some(apple_id.into());
             config.save(&config_path)?;
         }

@@ -143,7 +143,12 @@ fn migration_candidate(crm: &Connection, contact: &AppleContact) -> Result<Optio
         let normalized = repository::normalize_identity(kind, value);
         let mut statement = crm.prepare(
             "SELECT DISTINCT person_id FROM identities WHERE normalized_value=?1 AND active=1
-             AND person_id IN (SELECT id FROM people WHERE lifecycle_state='migration_pending')",
+             AND person_id IN (
+                 SELECT p.id FROM people p WHERE lifecycle_state='migration_pending'
+                 AND NOT EXISTS (
+                     SELECT 1 FROM person_merges m WHERE m.source_person_id=p.id
+                 )
+             )",
         )?;
         for id in statement
             .query_map([normalized], |row| row.get::<_, String>(0))?
@@ -186,8 +191,10 @@ fn enqueue_migration_reviews(crm: &Connection, contacts: &[AppleContact]) -> Res
         .iter()
         .map(|contact| serde_json::json!({"id": contact.id, "name": crate::contact_label::apple(contact)}))
         .collect();
-    let mut statement = crm
-        .prepare("SELECT id, display_name FROM people WHERE lifecycle_state='migration_pending'")?;
+    let mut statement = crm.prepare(
+        "SELECT id, display_name FROM people p WHERE lifecycle_state='migration_pending'
+         AND NOT EXISTS (SELECT 1 FROM person_merges m WHERE m.source_person_id=p.id)",
+    )?;
     let people: Vec<(String, String)> = statement
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<std::result::Result<_, _>>()?;

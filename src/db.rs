@@ -18,6 +18,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
         8,
         include_str!("../migrations/008_excluded_icloud_contacts.sql"),
     ),
+    (9, include_str!("../migrations/009_person_merges.sql")),
 ];
 
 pub fn open(path: &Path) -> Result<Connection> {
@@ -81,6 +82,6 @@ mod tests {
         let path = directory.path().join("crm.sqlite3");
         drop(open(&path).unwrap());
         let connection = open(&path).unwrap();
-        assert_eq!(schema_version(&connection).unwrap(), 8);
+        assert_eq!(schema_version(&connection).unwrap(), 9);
     }
 }

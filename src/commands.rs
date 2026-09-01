@@ -244,7 +244,8 @@ fn status(format: Format, config_path: PathBuf) -> Result<()> {
         active_people: count("SELECT COUNT(*) FROM people WHERE lifecycle_state='active'")?,
         retired_people: count("SELECT COUNT(*) FROM people WHERE lifecycle_state='retired'")?,
         migration_people: count(
-            "SELECT COUNT(*) FROM people WHERE lifecycle_state='migration_pending'",
+            "SELECT COUNT(*) FROM people p WHERE lifecycle_state='migration_pending'
+             AND NOT EXISTS (SELECT 1 FROM person_merges m WHERE m.source_person_id=p.id)",
         )?,
     };
     output::emit(
