@@ -55,6 +55,10 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: FaceCommand,
     },
+    Photos {
+        #[command(subcommand)]
+        command: PhotosCommand,
+    },
     Auth {
         #[command(subcommand)]
         command: AuthCommand,
@@ -73,6 +77,29 @@ pub(crate) struct FaceMatchArgs {
     pub library: Option<PathBuf>,
     #[arg(long, default_value_t = 5, value_parser = clap::value_parser!(u32).range(1..=100))]
     pub limit: u32,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum PhotosCommand {
+    Status,
+    Review(PhotosReviewArgs),
+    Reconcile(PhotosLibraryArgs),
+}
+
+#[derive(Args)]
+pub(crate) struct PhotosLibraryArgs {
+    #[arg(long)]
+    pub library: Option<PathBuf>,
+}
+
+#[derive(Args)]
+pub(crate) struct PhotosReviewArgs {
+    #[arg(long)]
+    pub person: Option<String>,
+    #[arg(long, requires = "person")]
+    pub photo: Option<PathBuf>,
+    #[arg(long)]
+    pub library: Option<PathBuf>,
 }
 
 #[derive(Args)]

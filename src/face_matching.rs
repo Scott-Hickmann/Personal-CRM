@@ -25,7 +25,7 @@ pub(crate) struct QueryFaceMatches {
     pub matches: Vec<FaceMatch>,
 }
 
-#[derive(Debug, serde::Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, serde::Deserialize, Serialize)]
 pub(crate) struct BoundingBox {
     pub x: f64,
     pub y: f64,

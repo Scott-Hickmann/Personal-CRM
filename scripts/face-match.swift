@@ -1,3 +1,4 @@
+import AppKit
 import CoreML
 import Foundation
 import ImageIO
@@ -10,7 +11,7 @@ private struct Response: Codable {
 private struct Face: Codable {
     let faceIndex: Int
     let boundingBox: BoundingBox
-    let faceprint: String
+    let faceprint: String?
 }
 
 private struct BoundingBox: Codable {
@@ -39,7 +40,7 @@ private func orientation(of url: URL) -> CGImagePropertyOrientation {
     return CGImagePropertyOrientation(rawValue: value.uint32Value) ?? .up
 }
 
-private func faces(url: URL) throws -> [Face] {
+private func faces(url: URL, includeFaceprint: Bool) throws -> [Face] {
     let handler = VNImageRequestHandler(url: url, orientation: orientation(of: url), options: [:])
     let detection = VNDetectFaceRectanglesRequest()
     try useCPU(detection)
@@ -55,7 +56,7 @@ private func faces(url: URL) throws -> [Face] {
     }
 
     return try observations.enumerated().map { offset, observation in
-        let data = try faceprint(for: observation, using: handler)
+        let data = try includeFaceprint ? faceprint(for: observation, using: handler) : nil
         let box = observation.boundingBox
         return Face(
             faceIndex: offset + 1,
@@ -65,9 +66,57 @@ private func faces(url: URL) throws -> [Face] {
                 width: box.size.width,
                 height: box.size.height
             ),
-            faceprint: data.base64EncodedString()
+            faceprint: data?.base64EncodedString()
         )
     }
+}
+
+private func writePreview(url: URL, faces: [Face], output: URL) throws {
+    guard let source = NSImage(contentsOf: url) else {
+        throw HelperError.message("could not render the selected photo")
+    }
+    let sourceSize = source.size
+    guard sourceSize.width > 0, sourceSize.height > 0 else {
+        throw HelperError.message("selected photo has invalid dimensions")
+    }
+    let maximumDimension = 1600.0
+    let scale = min(1.0, maximumDimension / max(sourceSize.width, sourceSize.height))
+    let size = NSSize(width: sourceSize.width * scale, height: sourceSize.height * scale)
+    let preview = NSImage(size: size)
+    preview.lockFocus()
+    source.draw(in: NSRect(origin: .zero, size: size))
+    NSColor.systemRed.setStroke()
+    NSColor.systemRed.setFill()
+    let lineWidth = max(3.0, max(size.width, size.height) / 300.0)
+    let fontSize = max(18.0, max(size.width, size.height) / 30.0)
+    let attributes: [NSAttributedString.Key: Any] = [
+        .font: NSFont.boldSystemFont(ofSize: fontSize),
+        .foregroundColor: NSColor.white,
+        .backgroundColor: NSColor.systemRed,
+    ]
+    for face in faces {
+        let box = face.boundingBox
+        let rectangle = NSRect(
+            x: box.x * size.width,
+            y: box.y * size.height,
+            width: box.width * size.width,
+            height: box.height * size.height
+        )
+        let path = NSBezierPath(rect: rectangle)
+        path.lineWidth = lineWidth
+        path.stroke()
+        NSString(string: " \(face.faceIndex) ").draw(
+            at: NSPoint(x: rectangle.minX, y: max(0, rectangle.maxY - fontSize)),
+            withAttributes: attributes
+        )
+    }
+    preview.unlockFocus()
+    guard let tiff = preview.tiffRepresentation,
+          let representation = NSBitmapImageRep(data: tiff),
+          let png = representation.representation(using: .png, properties: [:]) else {
+        throw HelperError.message("could not encode the face preview")
+    }
+    try png.write(to: output, options: .atomic)
 }
 
 private func faceprint(
@@ -107,11 +156,22 @@ private func useCPU(_ request: VNRequest) throws {
 }
 
 do {
-    guard CommandLine.arguments.count == 2 else {
+    let detectOnly = CommandLine.arguments.last == "--detect-only"
+    let validCount = detectOnly ? CommandLine.arguments.count == 4
+                                : (CommandLine.arguments.count == 2 || CommandLine.arguments.count == 3)
+    guard validCount else {
         throw HelperError.message("invalid Vision helper invocation")
     }
     let url = URL(fileURLWithPath: CommandLine.arguments[1]).standardizedFileURL
-    let response = Response(faces: try faces(url: url))
+    let detectedFaces = try faces(url: url, includeFaceprint: !detectOnly)
+    if CommandLine.arguments.count >= 3 {
+        try writePreview(
+            url: url,
+            faces: detectedFaces,
+            output: URL(fileURLWithPath: CommandLine.arguments[2]).standardizedFileURL
+        )
+    }
+    let response = Response(faces: detectedFaces)
     let data = try JSONEncoder().encode(response)
     FileHandle.standardOutput.write(data)
     FileHandle.standardOutput.write(Data("\n".utf8))

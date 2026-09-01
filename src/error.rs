@@ -29,6 +29,8 @@ pub enum CrmError {
     Network(String),
     #[error("Photos face matching error: {0}")]
     PhotoFaceMatching(String),
+    #[error("Photos integration error: {0}")]
+    Photos(String),
     #[error("serialization error: {0}")]
     Serialization(String),
     #[error("unsupported platform: this CRM supports macOS only")]
@@ -44,7 +46,7 @@ impl CrmError {
             | Self::Serialization(_) => 2,
             Self::ConfigMissing(_) | Self::Io { .. } => 4,
             Self::Authentication(_) | Self::Network(_) => 4,
-            Self::PhotoFaceMatching(_) => 5,
+            Self::PhotoFaceMatching(_) | Self::Photos(_) => 5,
             Self::UnsupportedPlatform => 5,
             Self::PersonNotFound(_) | Self::AmbiguousPerson(_) => 3,
             Self::IncompatibleSource(_) => 5,
@@ -66,6 +68,7 @@ impl CrmError {
             Self::Authentication(_) => "authentication_error",
             Self::Network(_) => "network_error",
             Self::PhotoFaceMatching(_) => "photo_face_matching_error",
+            Self::Photos(_) => "photos_error",
             Self::Serialization(_) => "serialization_error",
             Self::UnsupportedPlatform => "unsupported_platform",
         }

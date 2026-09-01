@@ -95,6 +95,27 @@ crm face match /path/to/photo.jpg --library "/path/to/Photos Library.photoslibra
 
 Photos uses a private database schema and faceprint runtime, so the command validates both and stops if a macOS update makes either incompatible. Reference originals do not need to be downloaded from iCloud because matching uses the faceprints Photos already stores locally.
 
+## Link CRM people to Photos
+
+Review CRM people one at a time, confirm existing named Photos people, or provide a local image when no Photos person exists:
+
+```sh
+crm photos review
+crm photos review --person "Alex"
+crm photos review --person "Alex" --photo /path/to/alex.jpg
+```
+
+Name matches are suggestions only and always require confirmation. When a local image contains multiple faces, the command opens an annotated preview and asks which numbered face belongs to the CRM person. Approved images are imported through the Photos scripting interface into the `CRM Imports` album and tagged with `personal-crm:<person-id>`. The source image is not changed or retained by the CRM. If the same file is selected for another person in a group photo, the existing Photos asset is reused.
+
+The imported asset is linked to the CRM immediately. Apple Photos may need time to analyze it; name the face in Photos, then complete the named-person association:
+
+```sh
+crm photos reconcile
+crm photos status
+```
+
+`reconcile` confirms named faces on imported assets, refreshes Photos name changes, and marks removed or merged Photos identities as stale. The workflow never writes directly to `Photos.sqlite`; only the explicit, approved import changes Photos. Full Disk Access and permission to automate Photos may be required. Imports target the active System Photo Library, so `--library` is available for linking and reconciliation but intentionally disabled for importing.
+
 ## Queries and relationship utilities
 
 Commands support table output by default and stable `--format json` or `--format jsonl` output for agents.

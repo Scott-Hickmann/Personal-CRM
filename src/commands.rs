@@ -48,6 +48,7 @@ pub(crate) fn run(format: Format, config: Option<PathBuf>, command: Command) -> 
         Command::Explain(args) => crate::analytics_commands::explain(format, config_path, args),
         Command::Graph(args) => crate::analytics_commands::graph(format, config_path, args),
         Command::Face { command } => crate::face_commands::run(format, command),
+        Command::Photos { command } => crate::photos_commands::run(format, config_path, command),
         Command::Auth { command } => crate::auth_commands::run(format, config_path, command),
     }
 }
@@ -288,7 +289,7 @@ fn probe_sources(config: &Config) -> Result<Vec<serde_json::Value>> {
     }).collect()
 }
 
-fn open_database(config_path: &Path) -> Result<rusqlite::Connection> {
+pub(crate) fn open_database(config_path: &Path) -> Result<rusqlite::Connection> {
     ensure_config(config_path)?;
     Config::load(config_path)?;
     db::open(&config_path.parent().unwrap().join("crm.sqlite3"))

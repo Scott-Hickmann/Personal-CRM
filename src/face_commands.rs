@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 use base64::Engine;
@@ -11,6 +11,7 @@ use crate::error::{CrmError, Result};
 use crate::face_matching::{self, BoundingBox, FaceMatchResult, QueryFaceprint};
 use crate::output::{self, Format};
 use crate::photos_faces;
+use crate::photos_library;
 
 const HELPER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/face-match.swift");
 
@@ -24,7 +25,7 @@ struct HelperResponse {
 struct HelperFace {
     face_index: usize,
     bounding_box: BoundingBox,
-    faceprint: String,
+    faceprint: Option<String>,
 }
 
 pub(crate) fn run(format: Format, command: FaceCommand) -> Result<()> {
@@ -34,25 +35,70 @@ pub(crate) fn run(format: Format, command: FaceCommand) -> Result<()> {
 
 fn match_photo(format: Format, args: FaceMatchArgs) -> Result<()> {
     require_file(&args.photo, "query photo")?;
-    let library = args.library.map_or_else(discover_library, Ok)?;
+    let library = photos_library::discover_library(args.library)?;
     let database_path = library.join("database/Photos.sqlite");
     require_file(&database_path, "Photos database")?;
 
     let stored = photos_faces::load(&database_path)?;
-    let queries = query_faceprints(&args.photo)?;
+    let queries = query_faceprints(&args.photo, None)?;
     let result = face_matching::rank(&stored, queries, args.limit as usize)?;
     emit(format, &result)
 }
 
-fn query_faceprints(photo: &Path) -> Result<Vec<QueryFaceprint>> {
+pub(crate) fn query_faceprints(
+    photo: &Path,
+    preview: Option<&Path>,
+) -> Result<Vec<QueryFaceprint>> {
+    let response = run_helper(photo, preview, false)?;
+    response
+        .into_iter()
+        .map(|face| {
+            let encoded = face.faceprint.ok_or_else(|| {
+                CrmError::PhotoFaceMatching("Vision helper returned no faceprint".into())
+            })?;
+            let bytes = STANDARD.decode(encoded).map_err(|error| {
+                CrmError::PhotoFaceMatching(format!(
+                    "invalid faceprint from Vision helper: {error}"
+                ))
+            })?;
+            let vector = face_matching::float_vector(&bytes).ok_or_else(|| {
+                CrmError::PhotoFaceMatching("invalid faceprint from Vision helper".into())
+            })?;
+            Ok(QueryFaceprint {
+                face_index: face.face_index,
+                bounding_box: face.bounding_box,
+                vector,
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn detect_faces(photo: &Path, preview: &Path) -> Result<Vec<QueryFaceprint>> {
+    Ok(run_helper(photo, Some(preview), true)?
+        .into_iter()
+        .map(|face| QueryFaceprint {
+            face_index: face.face_index,
+            bounding_box: face.bounding_box,
+            vector: Vec::new(),
+        })
+        .collect())
+}
+
+fn run_helper(photo: &Path, preview: Option<&Path>, detect_only: bool) -> Result<Vec<HelperFace>> {
     let cache = std::env::temp_dir().join("personal-crm-swift-module-cache");
     fs::create_dir_all(&cache).map_err(|source| CrmError::Io {
         path: cache.clone(),
         source,
     })?;
-    let response = Command::new("xcrun")
-        .args(["swift", HELPER])
-        .arg(photo)
+    let mut command = Command::new("xcrun");
+    command.args(["swift", HELPER]).arg(photo);
+    if let Some(preview) = preview {
+        command.arg(preview);
+    }
+    if detect_only {
+        command.arg("--detect-only");
+    }
+    let response = command
         .env("CLANG_MODULE_CACHE_PATH", &cache)
         .env("SWIFT_MODULECACHE_PATH", &cache)
         .output()
@@ -77,25 +123,7 @@ fn query_faceprints(photo: &Path) -> Result<Vec<QueryFaceprint>> {
             "Vision helper returned no faces".into(),
         ));
     }
-    response
-        .faces
-        .into_iter()
-        .map(|face| {
-            let bytes = STANDARD.decode(face.faceprint).map_err(|error| {
-                CrmError::PhotoFaceMatching(format!(
-                    "invalid faceprint from Vision helper: {error}"
-                ))
-            })?;
-            let vector = face_matching::float_vector(&bytes).ok_or_else(|| {
-                CrmError::PhotoFaceMatching("invalid faceprint from Vision helper".into())
-            })?;
-            Ok(QueryFaceprint {
-                face_index: face.face_index,
-                bounding_box: face.bounding_box,
-                vector,
-            })
-        })
-        .collect()
+    Ok(response.faces)
 }
 
 fn emit(format: Format, result: &FaceMatchResult) -> Result<()> {
@@ -134,39 +162,5 @@ fn require_file(path: &Path, label: &str) -> Result<()> {
             "{label} not found at {}",
             path.display()
         )))
-    }
-}
-
-fn discover_library() -> Result<PathBuf> {
-    let pictures = dirs::picture_dir().ok_or_else(|| {
-        CrmError::PhotoFaceMatching("cannot determine the Pictures directory".into())
-    })?;
-    let conventional = pictures.join("Photos Library.photoslibrary");
-    if conventional.join("database/Photos.sqlite").is_file() {
-        return Ok(conventional);
-    }
-    let entries = fs::read_dir(&pictures).map_err(|source| CrmError::Io {
-        path: pictures.clone(),
-        source,
-    })?;
-    let mut libraries = entries
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| {
-            path.extension()
-                .is_some_and(|value| value == "photoslibrary")
-                && path.join("database/Photos.sqlite").is_file()
-        })
-        .collect::<Vec<_>>();
-    libraries.sort();
-    match libraries.as_slice() {
-        [library] => Ok(library.clone()),
-        [] => Err(CrmError::PhotoFaceMatching(format!(
-            "no Photos library found in {}; pass --library PATH",
-            pictures.display()
-        ))),
-        _ => Err(CrmError::PhotoFaceMatching(format!(
-            "multiple Photos libraries found in {}; pass --library PATH",
-            pictures.display()
-        ))),
     }
 }
