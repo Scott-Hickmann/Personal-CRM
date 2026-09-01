@@ -126,7 +126,7 @@ crm fact set --person "Alex" --key "birthday" --value "May 4"
 crm tag add --person "Alex" --tag "climbing"
 ```
 
-People cannot be created directly in CRM. Unresolved Google and communication identities become contact candidates in `crm review`; approval creates the iCloud contact first. Notes, facts, and tags support `--dry-run`. Partial names are accepted only when they resolve to exactly one active or retired person.
+People cannot be created directly in CRM. Unmanaged Google Contacts and unresolved WhatsApp or Gmail identities become contact candidates in `crm review`; each suggestion shows its source, and approval creates the iCloud contact first. SMS, RCS, iMessage, Apple Calls, WhatsApp groups, and identities already present on an active iCloud contact are excluded. Notes, facts, and tags support `--dry-run`. Partial names are accepted only when they resolve to exactly one active or retired person.
 
 ## Match a face from Photos
 

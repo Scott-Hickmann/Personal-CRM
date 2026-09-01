@@ -30,6 +30,7 @@ mod photos_review;
 mod query;
 mod repository;
 mod review;
+mod review_candidates;
 mod review_commands;
 mod scoring;
 mod source;

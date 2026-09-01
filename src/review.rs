@@ -8,6 +8,7 @@ use crate::error::{CrmError, Result};
 pub struct ReviewItem {
     pub id: String,
     pub kind: String,
+    pub source: Option<String>,
     pub subject_key: String,
     pub summary: String,
     pub details: serde_json::Value,
@@ -52,13 +53,18 @@ pub fn pending(connection: &Connection) -> Result<Vec<ReviewItem>> {
     )?;
     Ok(statement
         .query_map([], |row| {
+            let kind: String = row.get(1)?;
             let details: String = row.get(4)?;
+            let details: serde_json::Value = serde_json::from_str(&details).unwrap_or_default();
             Ok(ReviewItem {
                 id: row.get(0)?,
-                kind: row.get(1)?,
+                source: (kind == "contact_candidate")
+                    .then(|| crate::review_candidates::source(&details))
+                    .flatten(),
+                kind,
                 subject_key: row.get(2)?,
                 summary: row.get(3)?,
-                details: serde_json::from_str(&details).unwrap_or_default(),
+                details,
                 status: row.get(5)?,
                 created_at: row.get(6)?,
             })
@@ -172,62 +178,7 @@ pub fn reject(connection: &Connection, review_id: &str) -> Result<()> {
 }
 
 pub fn enqueue_unresolved_candidates(connection: &Connection) -> Result<usize> {
-    resolve_non_person_contact_candidates(connection)?;
-    let mut statement = connection.prepare(
-        "SELECT lower(trim(ip.identity_value)), COUNT(*), group_concat(DISTINCT i.channel),
-                MAX(NULLIF(trim(ip.display_name), ''))
-         FROM interaction_participants ip JOIN interactions i ON i.id=ip.interaction_id
-         WHERE ip.person_id IS NULL AND ip.identity_value IS NOT NULL
-           AND trim(ip.identity_value) != '' AND i.deleted_at IS NULL
-         GROUP BY lower(trim(ip.identity_value)) ORDER BY COUNT(*) DESC",
-    )?;
-    let mut rows: Vec<(String, i64, String, Option<String>)> = statement
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, Option<String>>(3)?,
-            ))
-        })?
-        .collect::<std::result::Result<_, _>>()?;
-    drop(statement);
-    rows.retain(|row| !is_non_person_whatsapp_identity(&row.0));
-    for (identity, count, channels, name) in &rows {
-        let label = name.as_deref().unwrap_or(identity);
-        enqueue(
-            connection,
-            "contact_candidate",
-            identity,
-            &format!("Create an iCloud contact for {label}?"),
-            serde_json::json!({"name": name, "identity": identity, "interaction_count": count, "channels": channels}),
-        )?;
-    }
-    Ok(rows.len())
-}
-
-fn resolve_non_person_contact_candidates(connection: &Connection) -> Result<()> {
-    let mut statement = connection.prepare(
-        "SELECT id, subject_key FROM review_items
-         WHERE kind='contact_candidate' AND status='pending'",
-    )?;
-    let rows: Vec<(String, String)> = statement
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-        .collect::<std::result::Result<_, _>>()?;
-    drop(statement);
-    for (id, subject) in rows {
-        if is_non_person_whatsapp_identity(&subject) {
-            resolve(connection, &id)?;
-        }
-    }
-    Ok(())
-}
-
-fn is_non_person_whatsapp_identity(identity: &str) -> bool {
-    let identity = identity.trim().to_ascii_lowercase();
-    ["@g.us", "@broadcast", "@newsletter"]
-        .iter()
-        .any(|suffix| identity.ends_with(suffix))
+    crate::review_candidates::enqueue(connection)
 }
 
 pub fn pending_migration_count(connection: &Connection) -> Result<usize> {
@@ -273,75 +224,5 @@ mod tests {
             .unwrap();
         assert_eq!(row, ("apple-1".into(), "active".into()));
         assert!(pending(&connection).unwrap().is_empty());
-    }
-
-    #[test]
-    fn contact_candidate_uses_source_name() {
-        let directory = tempfile::tempdir().unwrap();
-        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
-        connection
-            .execute_batch(
-                "INSERT INTO sources(id, kind) VALUES ('messages', 'messages');
-                 INSERT INTO interactions(
-                     id, source_id, native_id, channel, kind, occurred_at, last_seen_at
-                 ) VALUES ('message', 'messages', 'native', 'iMessage', 'message',
-                           '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
-                 INSERT INTO interaction_participants(
-                     interaction_id, identity_value, display_name, role
-                 ) VALUES ('message', '+15550100', 'Alex Example', 'sender');",
-            )
-            .unwrap();
-
-        enqueue_unresolved_candidates(&connection).unwrap();
-
-        let item = pending(&connection).unwrap().pop().unwrap();
-        assert_eq!(item.summary, "Create an iCloud contact for Alex Example?");
-        assert_eq!(item.details["name"], "Alex Example");
-        assert_eq!(item.details["identity"], "+15550100");
-    }
-
-    #[test]
-    fn whatsapp_conversation_entities_are_not_contact_candidates() {
-        let directory = tempfile::tempdir().unwrap();
-        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
-        connection
-            .execute_batch(
-                "INSERT INTO sources(id, kind) VALUES ('whatsapp', 'whatsapp');
-                 INSERT INTO interactions(
-                     id, source_id, native_id, channel, kind, occurred_at, last_seen_at
-                 ) VALUES
-                     ('group-message', 'whatsapp', 'group', 'whatsapp', 'message',
-                      '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
-                     ('person-message', 'whatsapp', 'person', 'whatsapp', 'message',
-                      '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
-                 INSERT INTO interaction_participants(
-                     interaction_id, identity_value, display_name, role
-                 ) VALUES
-                     ('group-message', '120363000000@g.us', 'Family', 'recipient'),
-                     ('person-message', '15550100@s.whatsapp.net', 'Alex', 'sender');",
-            )
-            .unwrap();
-        let group_review = enqueue(
-            &connection,
-            "contact_candidate",
-            "120363000000@g.us",
-            "Create an iCloud contact for Family?",
-            serde_json::json!({}),
-        )
-        .unwrap();
-
-        assert_eq!(enqueue_unresolved_candidates(&connection).unwrap(), 1);
-
-        let items = pending(&connection).unwrap();
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].subject_key, "15550100@s.whatsapp.net");
-        let group_status: String = connection
-            .query_row(
-                "SELECT status FROM review_items WHERE id=?1",
-                [group_review],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(group_status, "resolved");
     }
 }

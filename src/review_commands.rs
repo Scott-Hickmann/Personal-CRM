@@ -18,7 +18,15 @@ pub fn run(format: Format, config_path: PathBuf, args: ReviewArgs) -> Result<()>
         let items = review::pending(&connection)?;
         let table = items
             .iter()
-            .map(|item| format!("{}  {:<20} {}", item.id, item.kind, item.summary))
+            .map(|item| {
+                format!(
+                    "{}  {:<20} {:<24} {}",
+                    item.id,
+                    item.kind,
+                    item.source.as_deref().unwrap_or("-"),
+                    item.summary
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n");
         return output::emit(format, "review", &items, table);
