@@ -57,7 +57,8 @@ fn first_identity(connection: &Connection, person_id: &str, kind: &str) -> Resul
     connection
         .query_row(
             "SELECT value FROM identities
-             WHERE person_id=?1 AND kind=?2 AND active=1 ORDER BY value LIMIT 1",
+             WHERE person_id=?1 AND kind=?2
+             ORDER BY active DESC, value LIMIT 1",
             [person_id, kind],
             |row| row.get(0),
         )
@@ -72,6 +73,7 @@ fn nonempty(value: Option<&str>) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db;
 
     #[test]
     fn includes_phone_then_email_after_name() {
@@ -88,5 +90,25 @@ mod tests {
     #[test]
     fn does_not_repeat_an_identity_used_as_the_name() {
         assert_eq!(format(None, Some("+1234567890"), None), "+1234567890");
+    }
+
+    #[test]
+    fn person_label_falls_back_to_preserved_inactive_identities() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO people(id, display_name) VALUES ('person', 'Unnamed contact');
+                 INSERT INTO identities(
+                     id, person_id, kind, value, normalized_value, active
+                 ) VALUES
+                     ('phone', 'person', 'phone', '+1234567890', '1234567890', 0),
+                     ('email', 'person', 'email', 'alex@example.com', 'alex@example.com', 0);",
+            )
+            .unwrap();
+
+        let label = person(&connection, "person", "Unnamed contact").unwrap();
+
+        assert_eq!(label, "Unnamed contact (+1234567890, alex@example.com)");
     }
 }
