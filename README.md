@@ -9,6 +9,7 @@
 - Full Disk Access for the terminal or Codex process when reading protected Apple and WhatsApp databases
 - Ollama with `qwen3.5:9b` and `embeddinggemma` for analysis
 - A Google OAuth desktop client JSON file for each Gmail setup session
+- The Google People API enabled on the OAuth project when publishing contacts
 
 No binary installation is required. Add this to `~/.zshrc`:
 
@@ -47,6 +48,46 @@ crm auth gmail remove account@example.com
 ```
 
 Refresh tokens are stored in macOS Keychain, not the configuration file. Gmail access uses the read-only scope and GET requests only. Sync excludes Spam and Trash. Deterministic bulk/automated email is reduced to metadata; local analysis can remove retained bodies it classifies as non-personal. All configured self email addresses are treated equally, including work and personal addresses.
+
+## Publish iCloud contacts to Google
+
+Contact publishing is separate from `crm sync contacts`. The existing sync command imports Apple Contacts into the local CRM; publishing reads one selected iCloud container and maintains filtered replicas in personal Google Contacts and Google Workspace. iCloud remains the source of truth.
+
+List the available Apple contact containers:
+
+```sh
+crm contacts containers
+```
+
+Authorize Google Contacts access once for each Google account. This uses a separate Keychain token and does not broaden or replace the Gmail read token. If Gmail is already configured, its OAuth credentials file is reused; otherwise provide it explicitly on the first authorization:
+
+```sh
+crm auth contacts add
+crm auth contacts add --credentials /path/to/client_secret.json
+crm auth contacts list
+```
+
+Configure the selected iCloud container, both Google roles, and every domain that identifies a work email:
+
+```sh
+crm contacts configure \
+  --source-container "CONTAINER-ID" \
+  --personal-account "me@gmail.com" \
+  --workspace-account "me@example.com" \
+  --work-domain "example.com"
+```
+
+Preview every proposed action before applying it:
+
+```sh
+crm contacts publish
+crm contacts publish --apply
+crm contacts status
+```
+
+Contacts without email addresses remain only in iCloud. Every contact with an email is published to the personal account with its names, emails, phone numbers, and organization fields. A contact with an Apple `work` email label or configured work domain is also published to Workspace, limited to its work emails, work-labeled phone numbers, and organization fields.
+
+Published Google contacts carry a private ownership marker. The command never modifies an unmarked Google contact merely because its email matches; it reports a collision instead. Google edits to managed fields are replaced by the iCloud values, Google deletions are recreated, and contacts that stop qualifying are deleted only when the tool previously managed them. Applying a large deletion requires `--allow-large-delete` after reviewing the preview.
 
 ## Synchronize and analyze
 
@@ -152,9 +193,9 @@ Use `crm explain PERSON` to see the components for one person. Inferred relation
 
 ## Source safety
 
-Local source SQLite databases are opened with SQLite's read-only flag, `PRAGMA query_only`, and an authorizer that rejects inserts, updates, deletes, schema changes, writable pragmas, and attached databases. Schema fingerprints and required columns are checked before import. Gmail is read with a read-only OAuth scope. The CRM never sends messages or writes to Contacts, Gmail, iMessage, WhatsApp, or call history.
+Local source SQLite databases are opened with SQLite's read-only flag, `PRAGMA query_only`, and an authorizer that rejects inserts, updates, deletes, schema changes, writable pragmas, and attached databases. Schema fingerprints and required columns are checked before import. Gmail is read with a read-only OAuth scope. The CRM never sends messages or writes to Apple Contacts, Gmail messages, iMessage, WhatsApp, or call history. `crm contacts publish --apply` is the sole workflow that writes to an external contact store, and it writes only tool-managed Google Contacts.
 
-Only the CRM-owned SQLite database, configuration file, and macOS Keychain token entries are mutated.
+Outside that explicit publishing workflow, only the CRM-owned SQLite database, configuration file, macOS Keychain token entries, and user-approved Photos imports are mutated.
 
 ## Codex skills
 
