@@ -173,23 +173,27 @@ pub fn reject(connection: &Connection, review_id: &str) -> Result<()> {
 
 pub fn enqueue_unresolved_candidates(connection: &Connection) -> Result<usize> {
     let mut statement = connection.prepare(
-        "SELECT lower(trim(identity_value)), COUNT(*), group_concat(DISTINCT i.channel)
+        "SELECT lower(trim(ip.identity_value)), COUNT(*), group_concat(DISTINCT i.channel),
+                MAX(NULLIF(trim(ip.display_name), ''))
          FROM interaction_participants ip JOIN interactions i ON i.id=ip.interaction_id
          WHERE ip.person_id IS NULL AND ip.identity_value IS NOT NULL
            AND trim(ip.identity_value) != '' AND i.deleted_at IS NULL
-         GROUP BY lower(trim(identity_value)) ORDER BY COUNT(*) DESC",
+         GROUP BY lower(trim(ip.identity_value)) ORDER BY COUNT(*) DESC",
     )?;
-    let rows: Vec<(String, i64, String)> = statement
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+    let rows: Vec<(String, i64, String, Option<String>)> = statement
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?
         .collect::<std::result::Result<_, _>>()?;
     drop(statement);
-    for (identity, count, channels) in &rows {
+    for (identity, count, channels, name) in &rows {
+        let label = name.as_deref().unwrap_or(identity);
         enqueue(
             connection,
             "contact_candidate",
             identity,
-            &format!("Create an iCloud contact for {identity}?"),
-            serde_json::json!({"identity": identity, "interaction_count": count, "channels": channels}),
+            &format!("Create an iCloud contact for {label}?"),
+            serde_json::json!({"name": name, "identity": identity, "interaction_count": count, "channels": channels}),
         )?;
     }
     Ok(rows.len())
@@ -238,5 +242,30 @@ mod tests {
             .unwrap();
         assert_eq!(row, ("apple-1".into(), "active".into()));
         assert!(pending(&connection).unwrap().is_empty());
+    }
+
+    #[test]
+    fn contact_candidate_uses_source_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO sources(id, kind) VALUES ('messages', 'messages');
+                 INSERT INTO interactions(
+                     id, source_id, native_id, channel, kind, occurred_at, last_seen_at
+                 ) VALUES ('message', 'messages', 'native', 'iMessage', 'message',
+                           '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+                 INSERT INTO interaction_participants(
+                     interaction_id, identity_value, display_name, role
+                 ) VALUES ('message', '+15550100', 'Alex Example', 'sender');",
+            )
+            .unwrap();
+
+        enqueue_unresolved_candidates(&connection).unwrap();
+
+        let item = pending(&connection).unwrap().pop().unwrap();
+        assert_eq!(item.summary, "Create an iCloud contact for Alex Example?");
+        assert_eq!(item.details["name"], "Alex Example");
+        assert_eq!(item.details["identity"], "+15550100");
     }
 }
