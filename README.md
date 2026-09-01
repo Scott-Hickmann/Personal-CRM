@@ -79,13 +79,13 @@ Every mutation supports `--dry-run`. Partial names are accepted only when they r
 
 ## Match a face from Photos
 
-Match a local photo containing exactly one face against the named people stored by macOS Photos:
+Match a local photo containing one or more faces against the named people stored by macOS Photos:
 
 ```sh
 crm face match /path/to/photo.jpg
 ```
 
-The command reads the System Photo Library database read-only, compares the query against up to three stored faceprints per named person, and ranks the closest results. Lower distance means greater facial similarity; this is not security-grade biometric identification. The query photo is not copied or retained, and nothing is uploaded or written to Photos.
+The command reads the System Photo Library database read-only, compares every detected face against up to three stored faceprints per named person, and ranks the closest results for each face. Faces are numbered top-to-bottom and then left-to-right; normalized bounding boxes use a bottom-left origin. `--limit` controls the number of results per face. Lower distance means greater facial similarity; this is not security-grade biometric identification. The query photo is not copied or retained, and nothing is uploaded or written to Photos.
 
 Full Disk Access may be required. If the library is outside the standard Pictures directory or more than one library is present, select it explicitly:
 

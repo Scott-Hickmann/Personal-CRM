@@ -4,7 +4,20 @@ import ImageIO
 import Vision
 
 private struct Response: Codable {
+    let faces: [Face]
+}
+
+private struct Face: Codable {
+    let faceIndex: Int
+    let boundingBox: BoundingBox
     let faceprint: String
+}
+
+private struct BoundingBox: Codable {
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
 }
 
 private enum HelperError: Error, CustomStringConvertible {
@@ -26,18 +39,41 @@ private func orientation(of url: URL) -> CGImagePropertyOrientation {
     return CGImagePropertyOrientation(rawValue: value.uint32Value) ?? .up
 }
 
-private func faceprint(url: URL) throws -> Data {
+private func faces(url: URL) throws -> [Face] {
     let handler = VNImageRequestHandler(url: url, orientation: orientation(of: url), options: [:])
     let detection = VNDetectFaceRectanglesRequest()
     try useCPU(detection)
     try handler.perform([detection])
-    let faces = detection.results ?? []
-    guard faces.count == 1 else {
-        throw HelperError.message(
-            "query photo must contain exactly one detectable face; found \(faces.count)"
-        )
+    let observations = (detection.results ?? []).sorted {
+        if $0.boundingBox.maxY == $1.boundingBox.maxY {
+            return $0.boundingBox.minX < $1.boundingBox.minX
+        }
+        return $0.boundingBox.maxY > $1.boundingBox.maxY
+    }
+    guard !observations.isEmpty else {
+        throw HelperError.message("query photo must contain at least one detectable face; found 0")
     }
 
+    return try observations.enumerated().map { offset, observation in
+        let data = try faceprint(for: observation, using: handler)
+        let box = observation.boundingBox
+        return Face(
+            faceIndex: offset + 1,
+            boundingBox: BoundingBox(
+                x: box.origin.x,
+                y: box.origin.y,
+                width: box.size.width,
+                height: box.size.height
+            ),
+            faceprint: data.base64EncodedString()
+        )
+    }
+}
+
+private func faceprint(
+    for observation: VNFaceObservation,
+    using handler: VNImageRequestHandler
+) throws -> Data {
     guard let requestType = NSClassFromString("VNCreateFaceprintRequest") as? VNRequest.Type else {
         throw HelperError.message("this macOS version does not provide the Photos faceprint runtime")
     }
@@ -46,7 +82,7 @@ private func faceprint(url: URL) throws -> Data {
     guard request.responds(to: inputSelector) else {
         throw HelperError.message("the Photos faceprint runtime is incompatible")
     }
-    request.perform(inputSelector, with: faces)
+    request.perform(inputSelector, with: [observation])
     try useCPU(request)
     try handler.perform([request])
 
@@ -75,7 +111,7 @@ do {
         throw HelperError.message("invalid Vision helper invocation")
     }
     let url = URL(fileURLWithPath: CommandLine.arguments[1]).standardizedFileURL
-    let response = Response(faceprint: try faceprint(url: url).base64EncodedString())
+    let response = Response(faces: try faces(url: url))
     let data = try JSONEncoder().encode(response)
     FileHandle.standardOutput.write(data)
     FileHandle.standardOutput.write(Data("\n".utf8))

@@ -7,6 +7,7 @@ mod config;
 mod db;
 mod error;
 mod face_commands;
+mod face_matching;
 mod gmail;
 mod graph;
 mod history_commands;
