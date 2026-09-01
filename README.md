@@ -53,7 +53,7 @@ Refresh tokens are stored in macOS Keychain, not the configuration file. Gmail a
 
 Contact publishing is separate from `crm sync contacts`. The existing sync command imports Apple Contacts into the local CRM; publishing reads one selected iCloud container and maintains filtered replicas in personal Google Contacts and Google Workspace. iCloud remains the source of truth.
 
-List the available Apple contact containers:
+List the available Apple contact containers. This reads the same protected, local databases as `crm sync contacts`, so the terminal or Codex process needs Full Disk Access:
 
 ```sh
 crm contacts containers

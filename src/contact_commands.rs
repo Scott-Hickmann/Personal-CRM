@@ -25,15 +25,17 @@ pub(crate) fn run(format: Format, config_path: PathBuf, command: ContactsCommand
         return Err(CrmError::ConfigMissing(config_path));
     }
     match command {
-        ContactsCommand::Containers => list_containers(format),
+        ContactsCommand::Containers => list_containers(format, &config_path),
         ContactsCommand::Configure(args) => configure(format, config_path, args),
         ContactsCommand::Publish(args) => publish(format, config_path, args),
         ContactsCommand::Status => status(format, config_path, "contacts.status"),
     }
 }
 
-fn list_containers(format: Format) -> Result<()> {
-    let containers = apple::containers()?;
+fn list_containers(format: Format, config_path: &std::path::Path) -> Result<()> {
+    let config = Config::load(config_path)?;
+    let contacts_path = contacts_path(&config)?;
+    let containers = apple::containers(contacts_path)?;
     let table = containers
         .iter()
         .map(|item| format!("{}\t{}\t{}", item.id, item.name, item.kind))
@@ -58,7 +60,7 @@ fn configure(format: Format, config_path: PathBuf, args: ContactsConfigureArgs) 
             )));
         }
     }
-    let containers = apple::containers()?;
+    let containers = apple::containers(contacts_path(&config)?)?;
     if !containers
         .iter()
         .any(|item| item.id == args.source_container)
@@ -120,7 +122,10 @@ fn publish(format: Format, config_path: PathBuf, args: ContactsPublishArgs) -> R
             })?;
         credentials.insert(account.clone(), Credentials::load(path)?);
     }
-    let desired = contact_publish::project(apple::contacts(container)?, publish)?;
+    let desired = contact_publish::project(
+        apple::contacts(contacts_path(&config)?, container)?,
+        publish,
+    )?;
     let connection = crate::commands::open_database(&config_path)?;
     let report = contact_publish::reconcile::run(
         &connection,
@@ -185,4 +190,12 @@ fn normalize_email(value: &str) -> Result<String> {
 
 fn not_configured() -> CrmError {
     CrmError::Contacts("contact publishing is not configured; run `crm contacts configure`".into())
+}
+
+fn contacts_path(config: &Config) -> Result<&std::path::Path> {
+    config
+        .paths
+        .contacts
+        .as_deref()
+        .ok_or_else(|| CrmError::Contacts("Apple Contacts path is not configured".into()))
 }
