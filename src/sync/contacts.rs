@@ -88,8 +88,11 @@ fn reconcile_contact(
             crm,
             "migration_person",
             &candidate,
-            &format!("Link an existing CRM person to {}?", display_name(contact)),
-            serde_json::json!({"suggested_apple_contact_id": contact.id, "display_name": display_name(contact)}),
+            &format!(
+                "Link an existing CRM person to {}?",
+                crate::contact_label::apple(contact)
+            ),
+            serde_json::json!({"suggested_apple_contact_id": contact.id, "display_name": crate::contact_label::apple_name(contact)}),
         )?;
         return Ok(false);
     } else {
@@ -97,14 +100,14 @@ fn reconcile_contact(
         crm.execute(
             "INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state, last_contact_sync_at)
              VALUES (?1, ?2, ?3, 'active', CURRENT_TIMESTAMP)",
-            params![id, display_name(contact), contact.id],
+            params![id, crate::contact_label::apple_name(contact), contact.id],
         )?;
         id
     };
     crm.execute(
         "UPDATE people SET display_name=?2, lifecycle_state='active', retired_at=NULL,
          last_contact_sync_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?1",
-        params![person_id, display_name(contact)],
+        params![person_id, crate::contact_label::apple_name(contact)],
     )?;
     crm.execute(
         "UPDATE identities SET active=0 WHERE person_id=?1",
@@ -176,7 +179,7 @@ fn retire_missing(crm: &Connection, seen: &HashSet<&str>) -> Result<()> {
 fn enqueue_migration_reviews(crm: &Connection, contacts: &[AppleContact]) -> Result<()> {
     let available: Vec<_> = contacts
         .iter()
-        .map(|contact| serde_json::json!({"id": contact.id, "name": display_name(contact)}))
+        .map(|contact| serde_json::json!({"id": contact.id, "name": crate::contact_label::apple(contact)}))
         .collect();
     let mut statement = crm
         .prepare("SELECT id, display_name FROM people WHERE lifecycle_state='migration_pending'")?;
@@ -185,11 +188,12 @@ fn enqueue_migration_reviews(crm: &Connection, contacts: &[AppleContact]) -> Res
         .collect::<std::result::Result<_, _>>()?;
     drop(statement);
     for (person_id, name) in people {
+        let label = crate::contact_label::person(crm, &person_id, &name)?;
         review::enqueue(
             crm,
             "migration_person",
             &person_id,
-            &format!("Link CRM person {name} to an iCloud contact"),
+            &format!("Link CRM person {label} to an iCloud contact"),
             serde_json::json!({"display_name": name, "available_icloud_contacts": available}),
         )?;
     }
@@ -263,23 +267,6 @@ fn duplicate_identities(contacts: &[AppleContact]) -> HashMap<String, Vec<String
         ids.len() > 1
     });
     owners
-}
-
-fn display_name(contact: &AppleContact) -> String {
-    let name = format!(
-        "{} {}",
-        contact.given_name.trim(),
-        contact.family_name.trim()
-    )
-    .trim()
-    .to_owned();
-    if !name.is_empty() {
-        name
-    } else if !contact.organization.trim().is_empty() {
-        contact.organization.trim().into()
-    } else {
-        "Unnamed contact".into()
-    }
 }
 
 #[cfg(test)]

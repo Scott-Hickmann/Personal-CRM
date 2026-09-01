@@ -5,6 +5,7 @@ mod cli;
 mod commands;
 mod config;
 mod contact_commands;
+mod contact_label;
 mod contact_publish;
 mod daemon;
 mod daemon_commands;

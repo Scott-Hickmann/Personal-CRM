@@ -50,6 +50,10 @@ fn candidate_includes_source_and_name() {
     let item = review::pending(&connection).unwrap().pop().unwrap();
     assert_eq!(item.source.as_deref(), Some("WhatsApp"));
     assert_eq!(item.details["name"], "Alex");
+    assert_eq!(
+        item.summary,
+        "Create an iCloud contact for Alex (+15550100)?"
+    );
 }
 
 #[test]

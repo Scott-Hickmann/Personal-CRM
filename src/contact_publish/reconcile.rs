@@ -169,18 +169,19 @@ fn enqueue_unmanaged_candidates(
         if name.is_empty() && identity.is_none() {
             continue;
         }
+        let label = crate::contact_label::format(
+            (!name.is_empty()).then_some(name.as_str()),
+            person.phone_numbers.first().map(|item| item.value.as_str()),
+            person
+                .email_addresses
+                .first()
+                .map(|item| item.value.as_str()),
+        );
         review::enqueue(
             connection,
             "contact_candidate",
             &subject,
-            &format!(
-                "Create an iCloud contact for {}?",
-                if name.is_empty() {
-                    identity.unwrap()
-                } else {
-                    &name
-                }
-            ),
+            &format!("Create an iCloud contact for {label}?"),
             serde_json::json!({
                 "source": "google", "account": account, "resource_name": resource,
                 "name": name, "emails": person.email_addresses, "phones": person.phone_numbers,
@@ -322,56 +323,4 @@ fn count(actions: &[PlannedAction], kind: ActionKind) -> usize {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::db;
-    use crate::google_contacts::TypedValue;
-
-    #[test]
-    fn destructive_google_action_becomes_review_item() {
-        let directory = tempfile::tempdir().unwrap();
-        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
-        let action = PlannedAction {
-            kind: ActionKind::Delete,
-            desired: None,
-            remote: Some(Person {
-                resource_name: Some("people/google-1".into()),
-                ..Person::default()
-            }),
-            apple_id: "apple-1".into(),
-            account: "personal@example.com".into(),
-        };
-        enqueue_delete(&connection, &action).unwrap();
-        let items = review::pending(&connection).unwrap();
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].kind, "google_delete");
-        assert_eq!(items[0].details["google_resource_name"], "people/google-1");
-    }
-
-    #[test]
-    fn unmanaged_google_contact_matching_icloud_is_not_a_candidate() {
-        let directory = tempfile::tempdir().unwrap();
-        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
-        connection
-            .execute_batch(
-                "INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state)
-                 VALUES ('person', 'Alex', 'apple-1', 'active');
-                 INSERT INTO identities(
-                     id, person_id, kind, value, normalized_value, active
-                 ) VALUES ('phone', 'person', 'phone', '+1 555 0100', '15550100', 1);",
-            )
-            .unwrap();
-        let person = Person {
-            resource_name: Some("people/google-1".into()),
-            phone_numbers: vec![TypedValue {
-                value: "+1 (555) 0100".into(),
-                kind: None,
-            }],
-            ..Person::default()
-        };
-
-        enqueue_unmanaged_candidates(&connection, "personal@example.com", &[person]).unwrap();
-
-        assert!(review::pending(&connection).unwrap().is_empty());
-    }
-}
+mod tests;

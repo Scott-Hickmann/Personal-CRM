@@ -76,7 +76,12 @@ pub(crate) fn enqueue(connection: &Connection) -> Result<usize> {
             .cloned()
             .collect::<Vec<_>>()
             .join(",");
-        let label = candidate.name.as_deref().unwrap_or(&candidate.identity);
+        let (phone, email) = if candidate.identity.contains('@') {
+            (None, Some(candidate.identity.as_str()))
+        } else {
+            (Some(candidate.identity.as_str()), None)
+        };
+        let label = crate::contact_label::format(candidate.name.as_deref(), phone, email);
         let sources = source_labels(channels.split(','));
         review::enqueue(
             connection,
