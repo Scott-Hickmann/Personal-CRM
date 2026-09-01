@@ -1,3 +1,5 @@
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+
 use rusqlite::{Connection, params};
 
 use crate::error::Result;
@@ -25,26 +27,111 @@ pub(crate) fn enqueue(connection: &Connection) -> Result<usize> {
         })?
         .collect::<std::result::Result<_, _>>()?;
     drop(statement);
-    let mut candidates = Vec::new();
-    for row in rows {
-        if !is_non_person_whatsapp_identity(&row.0)
-            && !identity_belongs_to_icloud_contact(connection, &row.0)?
-        {
-            candidates.push(row);
+    let mut grouped = BTreeMap::<String, Candidate>::new();
+    for (identity, count, channels, name) in rows {
+        if is_non_person_whatsapp_identity(&identity) {
+            continue;
+        }
+        let normalized = crate::repository::normalize_observed_identity(&identity);
+        if normalized.is_empty() {
+            continue;
+        }
+        let channel_set = channels
+            .split(',')
+            .map(str::trim)
+            .filter(|channel| !channel.is_empty())
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        let entry = grouped
+            .entry(normalized.clone())
+            .or_insert_with(|| Candidate {
+                identity: contact_identity(&identity, &normalized, &channel_set),
+                count: 0,
+                channels: BTreeSet::new(),
+                name: None,
+            });
+        entry.count += count;
+        entry.channels.extend(channel_set);
+        if entry.name.is_none() {
+            entry.name = name;
         }
     }
-    for (identity, count, channels, name) in &candidates {
-        let label = name.as_deref().unwrap_or(identity);
+    let mut candidates = Vec::new();
+    for (_, candidate) in grouped {
+        if !identity_belongs_to_icloud_contact(connection, &candidate.identity)? {
+            candidates.push(candidate);
+        }
+    }
+    candidates.sort_by(|left, right| {
+        right
+            .count
+            .cmp(&left.count)
+            .then(left.identity.cmp(&right.identity))
+    });
+    let mut active_subjects = HashSet::new();
+    for candidate in &candidates {
+        let channels = candidate
+            .channels
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(",");
+        let label = candidate.name.as_deref().unwrap_or(&candidate.identity);
         let sources = source_labels(channels.split(','));
         review::enqueue(
             connection,
             "contact_candidate",
-            identity,
+            &candidate.identity,
             &format!("Create an iCloud contact for {label}?"),
-            serde_json::json!({"name": name, "identity": identity, "interaction_count": count, "channels": channels, "sources": sources}),
+            serde_json::json!({"name": candidate.name, "identity": candidate.identity, "interaction_count": candidate.count, "channels": channels, "sources": sources}),
         )?;
+        active_subjects.insert(candidate.identity.clone());
     }
+    resolve_stale_communication_candidates(connection, &active_subjects)?;
     Ok(candidates.len())
+}
+
+struct Candidate {
+    identity: String,
+    count: i64,
+    channels: BTreeSet<String>,
+    name: Option<String>,
+}
+
+fn contact_identity(identity: &str, normalized: &str, channels: &BTreeSet<String>) -> String {
+    if normalized
+        .chars()
+        .all(|character| character.is_ascii_digit())
+        && channels
+            .iter()
+            .any(|channel| channel.to_ascii_lowercase().starts_with("whatsapp"))
+    {
+        format!("+{normalized}")
+    } else {
+        identity.to_owned()
+    }
+}
+
+fn resolve_stale_communication_candidates(
+    connection: &Connection,
+    active_subjects: &HashSet<String>,
+) -> Result<()> {
+    let mut statement = connection.prepare(
+        "SELECT id, subject_key, details_json FROM review_items
+         WHERE kind='contact_candidate' AND status='pending'",
+    )?;
+    let rows: Vec<(String, String, String)> = statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .collect::<std::result::Result<_, _>>()?;
+    drop(statement);
+    for (id, subject, details) in rows {
+        let details: serde_json::Value = serde_json::from_str(&details).unwrap_or_default();
+        let is_google = details.get("source").and_then(|value| value.as_str()) == Some("google");
+        if !is_google && has_supported_source(&details) && !active_subjects.contains(&subject) {
+            review::resolve(connection, &id)?;
+        }
+    }
+    Ok(())
 }
 
 fn resolve_ineligible(connection: &Connection) -> Result<()> {
@@ -191,107 +278,4 @@ fn is_non_person_whatsapp_identity(identity: &str) -> bool {
     ["@g.us", "@broadcast", "@newsletter", "@lid"]
         .iter()
         .any(|suffix| identity.ends_with(suffix))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::db;
-
-    fn interaction(connection: &Connection, id: &str, channel: &str, identity: &str, name: &str) {
-        connection
-            .execute(
-                "INSERT INTO interactions(
-                     id, source_id, native_id, channel, kind, occurred_at, last_seen_at
-                 ) VALUES (?1, 'whatsapp', ?1, ?2, 'message',
-                           '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
-                params![id, channel],
-            )
-            .unwrap();
-        connection
-            .execute(
-                "INSERT INTO interaction_participants(
-                     interaction_id, identity_value, display_name, role
-                 ) VALUES (?1, ?2, ?3, 'sender')",
-                params![id, identity, name],
-            )
-            .unwrap();
-    }
-
-    #[test]
-    fn candidate_includes_source_and_name() {
-        let directory = tempfile::tempdir().unwrap();
-        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
-        connection
-            .execute(
-                "INSERT INTO sources(id, kind) VALUES ('whatsapp', 'whatsapp')",
-                [],
-            )
-            .unwrap();
-        interaction(
-            &connection,
-            "message",
-            "whatsapp",
-            "15550100@s.whatsapp.net",
-            "Alex",
-        );
-
-        enqueue(&connection).unwrap();
-
-        let item = review::pending(&connection).unwrap().pop().unwrap();
-        assert_eq!(item.source.as_deref(), Some("WhatsApp"));
-        assert_eq!(item.details["name"], "Alex");
-    }
-
-    #[test]
-    fn group_and_existing_contact_are_ineligible() {
-        let directory = tempfile::tempdir().unwrap();
-        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
-        connection
-            .execute_batch(
-                "INSERT INTO sources(id, kind) VALUES ('whatsapp', 'whatsapp');
-                 INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state)
-                 VALUES ('person', 'Alex', 'apple-1', 'active');
-                 INSERT INTO identities(id, person_id, kind, value, normalized_value, active)
-                 VALUES ('phone', 'person', 'phone', '+1 555 0100', '15550100', 1);",
-            )
-            .unwrap();
-        interaction(
-            &connection,
-            "group",
-            "whatsapp",
-            "120363000000@g.us",
-            "Family",
-        );
-        interaction(
-            &connection,
-            "person",
-            "whatsapp",
-            "15550100@s.whatsapp.net",
-            "Alex",
-        );
-        interaction(&connection, "sms", "SMS", "+16660100", "Unknown");
-        review::enqueue(
-            &connection,
-            "contact_candidate",
-            "15550100@s.whatsapp.net",
-            "Create an iCloud contact for Alex?",
-            serde_json::json!({
-                "identity": "15550100@s.whatsapp.net",
-                "channels": "whatsapp"
-            }),
-        )
-        .unwrap();
-        review::enqueue(
-            &connection,
-            "contact_candidate",
-            "+16660100",
-            "Create an iCloud contact for Unknown?",
-            serde_json::json!({"identity": "+16660100", "channels": "SMS"}),
-        )
-        .unwrap();
-
-        assert_eq!(enqueue(&connection).unwrap(), 0);
-        assert!(review::pending(&connection).unwrap().is_empty());
-    }
 }

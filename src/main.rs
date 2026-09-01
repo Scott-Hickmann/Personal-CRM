@@ -19,6 +19,7 @@ mod history_commands;
 mod jobs;
 mod ollama;
 mod output;
+mod phone;
 mod photo_links;
 mod photos_commands;
 mod photos_faces;
@@ -31,6 +32,8 @@ mod query;
 mod repository;
 mod review;
 mod review_candidates;
+#[cfg(test)]
+mod review_candidates_tests;
 mod review_commands;
 mod scoring;
 mod source;

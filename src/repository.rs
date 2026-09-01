@@ -272,7 +272,7 @@ pub(crate) fn upsert_identity(
 
 pub(crate) fn normalize_identity(kind: &str, value: &str) -> String {
     match kind {
-        "phone" | "whatsapp" => value.chars().filter(char::is_ascii_digit).collect(),
+        "phone" | "whatsapp" => crate::phone::normalize(value),
         _ => value.trim().to_lowercase(),
     }
 }
