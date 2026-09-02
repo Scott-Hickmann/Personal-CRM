@@ -50,39 +50,50 @@ export function PeopleExplorer({ people, relationshipCount }: { people: Overview
       </section>
 
       <Card>
-        <CardContent className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-[minmax(16rem,1fr)_10rem_10rem_10rem_11rem_auto]">
-          <label className="relative">
-            <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2" />
-            <Input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search names, emails, phones, or tags…"
-              className="pl-9"
-              autoFocus
-            />
-          </label>
-          <Filter value={tier} onChange={setTier} label="All tiers" options={["core", "close", "familiar", "acquaintance", "peripheral"]} />
-          <Filter value={activity} onChange={setActivity} label="All activity" options={["active", "cooling", "dormant", "never"]} />
-          <Filter value={lifecycle} onChange={setLifecycle} label="All records" options={["active", "retired"]} />
-          <Select value={sortBy} onValueChange={(value) => setSortBy(value as SortKey)}>
-            <SelectTrigger className="w-full" aria-label="Sort people by"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="affinity">Affinity</SelectItem>
-              <SelectItem value="interactions">Interactions</SelectItem>
-              <SelectItem value="recent">Last contact</SelectItem>
-              <SelectItem value="name">Name</SelectItem>
-            </SelectContent>
-          </Select>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => setSortDirection((value) => value === "desc" ? "asc" : "desc")}
-            aria-label={`Sort ${sortDirection === "desc" ? "ascending" : "descending"}`}
-            className="w-full xl:w-auto"
-          >
-            {sortDirection === "desc" ? <ArrowDown /> : <ArrowUp />}
-            {sortDirection === "desc" ? "Descending" : "Ascending"}
-          </Button>
+        <CardContent className="grid gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end">
+          <fieldset className="min-w-0 space-y-2">
+            <legend className="text-muted-foreground text-xs font-medium uppercase tracking-wide">Filter</legend>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(16rem,1fr)_10rem_10rem_10rem]">
+              <label className="relative">
+                <span className="sr-only">Search people</span>
+                <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2" />
+                <Input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Search names, emails, phones, or tags…"
+                  className="pl-9"
+                  autoFocus
+                />
+              </label>
+              <Filter value={tier} onChange={setTier} label="All tiers" options={["core", "close", "familiar", "acquaintance", "peripheral"]} />
+              <Filter value={activity} onChange={setActivity} label="All activity" options={["active", "cooling", "dormant", "never"]} />
+              <Filter value={lifecycle} onChange={setLifecycle} label="All records" options={["active", "retired"]} />
+            </div>
+          </fieldset>
+
+          <fieldset className="space-y-2 border-t pt-4 xl:border-t-0 xl:border-l xl:pt-0 xl:pl-4">
+            <legend className="text-muted-foreground text-xs font-medium uppercase tracking-wide">Sort</legend>
+            <div className="grid grid-cols-[minmax(10rem,1fr)_auto] gap-3">
+              <Select value={sortBy} onValueChange={(value) => setSortBy(value as SortKey)}>
+                <SelectTrigger className="w-full" aria-label="Sort people by"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="affinity">Affinity</SelectItem>
+                  <SelectItem value="interactions">Interactions</SelectItem>
+                  <SelectItem value="recent">Last contact</SelectItem>
+                  <SelectItem value="name">Name</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setSortDirection((value) => value === "desc" ? "asc" : "desc")}
+                aria-label={`Sort ${sortDirection === "desc" ? "ascending" : "descending"}`}
+              >
+                {sortDirection === "desc" ? <ArrowDown /> : <ArrowUp />}
+                <span className="hidden sm:inline">{sortDirection === "desc" ? "Descending" : "Ascending"}</span>
+              </Button>
+            </div>
+          </fieldset>
         </CardContent>
       </Card>
 
@@ -144,7 +155,7 @@ function Metric({ icon: Icon, label, value }: { icon: typeof UserRoundCheck; lab
 }
 
 function Filter({ value, onChange, label, options }: { value: string; onChange: (value: string) => void; label: string; options: string[] }) {
-  return <Select value={value} onValueChange={onChange}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">{label}</SelectItem>{options.map((option) => <SelectItem key={option} value={option}>{titleCase(option)}</SelectItem>)}</SelectContent></Select>;
+  return <Select value={value} onValueChange={onChange}><SelectTrigger className="w-full" aria-label={label}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">{label}</SelectItem>{options.map((option) => <SelectItem key={option} value={option}>{titleCase(option)}</SelectItem>)}</SelectContent></Select>;
 }
 
 function comparePeople(left: OverviewPerson, right: OverviewPerson, sortBy: SortKey, direction: SortDirection) {
