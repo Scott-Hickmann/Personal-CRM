@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 
 use crate::error::{CrmError, Result};
 
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum Format {
     Table,
     Json,

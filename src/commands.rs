@@ -1,7 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
-
 use crate::cli::{
     Command, ConfigCommand, FactCommand, FollowupCommand, InitArgs, NoteCommand, PersonCommand,
     QueryArgs, TagCommand, UiDataCommand,
@@ -13,23 +11,6 @@ use crate::output::{self, Format};
 use crate::query::{self, QueryOptions};
 use crate::repository;
 use crate::source::ReadOnlySource;
-
-#[derive(Serialize)]
-struct Status {
-    config_path: PathBuf,
-    database_path: PathBuf,
-    schema_version: i64,
-    source_count: i64,
-    daemon_running: bool,
-    daemon_pid: Option<i64>,
-    queued_jobs: i64,
-    running_jobs: i64,
-    failed_jobs: i64,
-    pending_reviews: i64,
-    active_people: i64,
-    retired_people: i64,
-    migration_people: i64,
-}
 
 pub(crate) fn run(format: Format, config: Option<PathBuf>, command: Command) -> Result<()> {
     if !cfg!(target_os = "macos") {
@@ -48,7 +29,7 @@ pub(crate) fn run(format: Format, config: Option<PathBuf>, command: Command) -> 
         Command::Doctor => doctor(format, config_path),
         Command::Start => crate::daemon_commands::start(format, config_path),
         Command::Stop => crate::daemon_commands::stop(format, config_path),
-        Command::Status => status(format, config_path),
+        Command::Status(args) => crate::status_commands::run(format, config_path, args),
         Command::Review(args) => crate::review_commands::run(format, config_path, args),
         Command::Run(args) => crate::daemon_commands::run_job(format, config_path, args.job),
         Command::Daemon => crate::daemon::run(config_path),
@@ -143,21 +124,11 @@ fn init(format: Format, config_path: PathBuf, args: InitArgs) -> Result<()> {
         .join("crm.sqlite3");
     let connection = db::open(&database_path)?;
     repository::ensure_self(&connection, &config.self_identity)?;
-    let status = Status {
+    let status = crate::status_commands::initialized(
         config_path,
         database_path,
-        schema_version: db::schema_version(&connection)?,
-        source_count: 0,
-        daemon_running: false,
-        daemon_pid: None,
-        queued_jobs: 0,
-        running_jobs: 0,
-        failed_jobs: 0,
-        pending_reviews: 0,
-        active_people: 0,
-        retired_people: 0,
-        migration_people: 1,
-    };
+        db::schema_version(&connection)?,
+    );
     output::emit(format, "config.init", &status, "CRM initialized".into())
 }
 
@@ -274,66 +245,6 @@ fn doctor(format: Format, config_path: PathBuf) -> Result<()> {
         format!(
             "platform  ok\nconfig    ok\ndatabase  ok\nsources   {}",
             source_checks.len()
-        ),
-    )
-}
-
-fn status(format: Format, config_path: PathBuf) -> Result<()> {
-    ensure_config(&config_path)?;
-    let database_path = config_path.parent().unwrap().join("crm.sqlite3");
-    let connection = db::open(&database_path)?;
-    let source_count =
-        connection.query_row("SELECT COUNT(*) FROM sources", [], |row| row.get(0))?;
-    let daemon_pid: Option<i64> = connection.query_row(
-        "SELECT pid FROM daemon_state WHERE id=1
-         UNION ALL SELECT NULL LIMIT 1",
-        [],
-        |row| row.get(0),
-    )?;
-    let daemon_running = daemon_pid.is_some_and(crate::daemon::process_is_running);
-    let count = |sql| connection.query_row(sql, [], |row| row.get::<_, i64>(0));
-    let status = Status {
-        config_path,
-        database_path,
-        schema_version: db::schema_version(&connection)?,
-        source_count,
-        daemon_running,
-        daemon_pid,
-        queued_jobs: count("SELECT COUNT(*) FROM jobs WHERE state='queued'")?,
-        running_jobs: count("SELECT COUNT(*) FROM jobs WHERE state='running'")?,
-        failed_jobs: crate::jobs::unresolved_failed_count(&connection)?,
-        pending_reviews: count("SELECT COUNT(*) FROM review_items WHERE status='pending'")?,
-        active_people: count("SELECT COUNT(*) FROM people WHERE lifecycle_state='active'")?,
-        retired_people: count("SELECT COUNT(*) FROM people WHERE lifecycle_state='retired'")?,
-        migration_people: count(
-            "SELECT COUNT(*) FROM people p WHERE lifecycle_state='migration_pending'
-             AND NOT EXISTS (SELECT 1 FROM person_merges m WHERE m.source_person_id=p.id)",
-        )?,
-    };
-    output::emit(
-        format,
-        "status",
-        &status,
-        format!(
-            "daemon         {}{}\nschema version  {}\nsources         {}\npeople          {} active, {} retired, {} migration\njobs            {} queued, {} running, {} failed\nreview          {} pending",
-            if status.daemon_running {
-                "running"
-            } else {
-                "stopped"
-            },
-            status
-                .daemon_pid
-                .map(|pid| format!(" (PID {pid})"))
-                .unwrap_or_default(),
-            status.schema_version,
-            status.source_count,
-            status.active_people,
-            status.retired_people,
-            status.migration_people,
-            status.queued_jobs,
-            status.running_jobs,
-            status.failed_jobs,
-            status.pending_reviews
         ),
     )
 }

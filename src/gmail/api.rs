@@ -105,6 +105,8 @@ pub struct MessageList {
     #[serde(default)]
     pub messages: Vec<MessageRef>,
     pub next_page_token: Option<String>,
+    #[serde(default)]
+    pub result_size_estimate: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -192,4 +194,18 @@ pub(crate) fn network_error(error: reqwest::Error) -> CrmError {
 }
 pub(crate) fn keyring_error(error: keyring::Error) -> CrmError {
     CrmError::Authentication(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_message_count_estimate() {
+        let list: MessageList =
+            serde_json::from_str(r#"{"messages":[{"id":"one"}],"resultSizeEstimate":20280}"#)
+                .unwrap();
+        assert_eq!(list.messages.len(), 1);
+        assert_eq!(list.result_size_estimate, 20_280);
+    }
 }

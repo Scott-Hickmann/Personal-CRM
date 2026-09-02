@@ -32,7 +32,7 @@ pub(crate) enum Command {
     Doctor,
     Start,
     Stop,
-    Status,
+    Status(StatusArgs),
     Review(ReviewArgs),
     Run(RunArgs),
     #[command(hide = true)]
@@ -83,6 +83,13 @@ pub(crate) enum Command {
 pub(crate) struct UiArgs {
     #[arg(long, default_value_t = 3000)]
     pub port: u16,
+}
+
+#[derive(Args)]
+pub(crate) struct StatusArgs {
+    /// Continuously show daemon progress and recent activity
+    #[arg(long)]
+    pub live: bool,
 }
 
 #[derive(Subcommand)]

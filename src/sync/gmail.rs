@@ -7,18 +7,32 @@ use super::gmail_message::{addresses, header, import_attachments, is_automated, 
 use super::{SyncReport, add_participant, finish_source, upsert_interaction};
 use crate::error::{CrmError, Result};
 use crate::gmail::{ApiClient, ApiResponse, Credentials, GmailMessage, HistoryPage, MessageList};
+use crate::progress::ProgressTracker;
 
-pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<Vec<SyncReport>> {
+pub fn sync(
+    config: &crate::config::Config,
+    crm: &Connection,
+    progress: &mut ProgressTracker,
+) -> Result<Vec<SyncReport>> {
     let credentials_path = config.gmail.credentials_path.as_ref().ok_or_else(|| {
         CrmError::InvalidConfig("Gmail credentials path is not configured".into())
     })?;
     let credentials = Credentials::load(credentials_path)?;
-    config
-        .gmail
-        .accounts
-        .iter()
-        .map(|account| sync_account(config, crm, &credentials, account))
-        .collect()
+    let account_count = config.gmail.accounts.len();
+    let mut reports = Vec::with_capacity(account_count);
+    for (index, account) in config.gmail.accounts.iter().enumerate() {
+        progress.phase(format!(
+            "Checking Gmail inbox {account} ({}/{account_count})",
+            index + 1
+        ));
+        let report = sync_account(config, crm, &credentials, account, progress)?;
+        progress.event(format!(
+            "Finished {account}: {} imported, {} deleted",
+            report.imported, report.deleted
+        ));
+        reports.push(report);
+    }
+    Ok(reports)
 }
 
 fn sync_account(
@@ -26,6 +40,7 @@ fn sync_account(
     crm: &Connection,
     credentials: &Credentials,
     account: &str,
+    progress: &mut ProgressTracker,
 ) -> Result<SyncReport> {
     let source_id = format!("gmail:{account}");
     let client = ApiClient::for_account(credentials, account)?;
@@ -43,11 +58,12 @@ fn sync_account(
         params![source_id, account],
     )?;
     if let Some(cursor) = cursor
-        && let Some(report) = partial_sync(config, crm, &client, &source_id, account, &cursor)?
+        && let Some(report) =
+            partial_sync(config, crm, &client, &source_id, account, &cursor, progress)?
     {
         return Ok(report);
     }
-    full_sync(config, crm, &client, &source_id, account)
+    full_sync(config, crm, &client, &source_id, account, progress)
 }
 
 fn full_sync(
@@ -56,11 +72,14 @@ fn full_sync(
     client: &ApiClient,
     source_id: &str,
     account: &str,
+    progress: &mut ProgressTracker,
 ) -> Result<SyncReport> {
     let run_at = Utc::now().to_rfc3339();
     let mut page_token: Option<String> = None;
     let mut imported = HashSet::new();
     let mut latest_history = 0_u64;
+    let mut processed = 0_u64;
+    let mut total = None;
     loop {
         let mut path = "messages?includeSpamTrash=false&maxResults=500".to_owned();
         if let Some(token) = &page_token {
@@ -72,6 +91,7 @@ fn full_sync(
                 "Gmail message listing disappeared".into(),
             ));
         };
+        total = Some(total.unwrap_or(0).max(page.result_size_estimate));
         for message in page.messages {
             if let Some(history) =
                 import_message(config, crm, client, source_id, &message.id, &run_at)?
@@ -79,6 +99,14 @@ fn full_sync(
                 imported.insert(message.id);
                 latest_history = latest_history.max(history);
             }
+            processed += 1;
+            progress.progress(
+                format!("Reading emails from {account}"),
+                processed,
+                total.map(|value| value.max(processed)),
+                true,
+                "emails",
+            );
         }
         page_token = page.next_page_token;
         if page_token.is_none() {
@@ -100,6 +128,7 @@ fn partial_sync(
     source_id: &str,
     account: &str,
     cursor: &str,
+    progress: &mut ProgressTracker,
 ) -> Result<Option<SyncReport>> {
     let run_at = Utc::now().to_rfc3339();
     let mut page_token: Option<String> = None;
@@ -137,11 +166,21 @@ fn partial_sync(
     for id in &deleted {
         delete_message(crm, source_id, id)?;
     }
+    let changed_count = changed.difference(&deleted).count() as u64;
+    let mut processed = 0_u64;
     let mut imported = 0;
     for id in changed.difference(&deleted) {
         if import_message(config, crm, client, source_id, id, &run_at)?.is_some() {
             imported += 1;
         }
+        processed += 1;
+        progress.progress(
+            format!("Reading new and changed emails from {account}"),
+            processed,
+            Some(changed_count),
+            false,
+            "emails",
+        );
     }
     crm.execute(
         "UPDATE sources SET cursor=?2, status='ok', last_sync_at=CURRENT_TIMESTAMP WHERE id=?1",

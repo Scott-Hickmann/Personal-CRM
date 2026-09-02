@@ -15,6 +15,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::error::Result;
+use crate::progress::ProgressTracker;
 use crate::source::ReadOnlySource;
 
 #[derive(Debug, Clone, Copy)]
@@ -39,6 +40,16 @@ pub fn run(
     config: &crate::config::Config,
     crm: &Connection,
 ) -> Result<Vec<SyncReport>> {
+    let mut progress = ProgressTracker::disabled();
+    run_with_progress(target, config, crm, &mut progress)
+}
+
+pub(crate) fn run_with_progress(
+    target: SyncTarget,
+    config: &crate::config::Config,
+    crm: &Connection,
+    progress: &mut ProgressTracker,
+) -> Result<Vec<SyncReport>> {
     let mut reports = Vec::new();
     if matches!(target, SyncTarget::Contacts) {
         let transaction = crm.unchecked_transaction()?;
@@ -62,7 +73,7 @@ pub fn run(
     }
     if matches!(target, SyncTarget::Gmail) && !config.gmail.accounts.is_empty() {
         let transaction = crm.unchecked_transaction()?;
-        reports.extend(gmail::sync(config, &transaction)?);
+        reports.extend(gmail::sync(config, &transaction, progress)?);
         transaction.commit()?;
     }
     Ok(reports)

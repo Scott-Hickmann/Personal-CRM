@@ -5,8 +5,6 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
 use crate::error::{CrmError, Result};
-use crate::sync::SyncTarget;
-use crate::{analysis, commands, contact_commands, photos_commands, review, scoring, sync};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -117,7 +115,8 @@ pub fn process_one(config_path: &Path, connection: &Connection) -> Result<bool> 
         return Ok(true);
     }
     let kind = JobKind::parse(&kind)?;
-    match run(config_path, kind) {
+    let mut progress = crate::progress::ProgressTracker::start(config_path, id, kind.as_str());
+    match crate::job_runner::run_with_progress(config_path, kind, &mut progress) {
         Ok(()) => {
             connection.execute(
                 "UPDATE jobs SET state='complete', completed_at=CURRENT_TIMESTAMP,
@@ -125,6 +124,7 @@ pub fn process_one(config_path: &Path, connection: &Connection) -> Result<bool> 
                 [id],
             )?;
             enqueue_downstream(connection, kind)?;
+            progress.idle(format!("Completed {}", kind.as_str()));
         }
         Err(error) => {
             let retry = attempts < 4;
@@ -138,43 +138,18 @@ pub fn process_one(config_path: &Path, connection: &Connection) -> Result<bool> 
                     error.to_string()
                 ],
             )?;
+            progress.idle(if retry {
+                format!("{} failed; retry scheduled: {error}", kind.as_str())
+            } else {
+                format!("{} failed: {error}", kind.as_str())
+            });
         }
     }
     Ok(true)
 }
 
 pub fn run(config_path: &Path, kind: JobKind) -> Result<()> {
-    let config = crate::config::Config::load(config_path)?;
-    let connection = commands::open_database(config_path)?;
-    match kind {
-        JobKind::Contacts => {
-            sync::run(SyncTarget::Contacts, &config, &connection)?;
-        }
-        JobKind::Communications => {
-            sync::run(SyncTarget::Imessage, &config, &connection)?;
-            sync::run(SyncTarget::Whatsapp, &config, &connection)?;
-            sync::run(SyncTarget::Calls, &config, &connection)?;
-        }
-        JobKind::Gmail => {
-            sync::run(SyncTarget::Gmail, &config, &connection)?;
-        }
-        JobKind::Analysis => {
-            analysis::run(&config, &connection, 100)?;
-        }
-        JobKind::Scoring => {
-            scoring::recalculate_all(&connection)?;
-        }
-        JobKind::Photos => {
-            photos_commands::reconcile_automatic(config_path)?;
-        }
-        JobKind::GooglePublish => {
-            contact_commands::publish_automatic(config_path)?;
-        }
-        JobKind::Suggestions => {
-            review::enqueue_unresolved_candidates(&connection)?;
-        }
-    }
-    Ok(())
+    crate::job_runner::run(config_path, kind)
 }
 
 fn enqueue_downstream(connection: &Connection, kind: JobKind) -> Result<()> {
