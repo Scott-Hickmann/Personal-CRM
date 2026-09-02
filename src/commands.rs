@@ -38,6 +38,9 @@ pub(crate) fn run(format: Format, config: Option<PathBuf>, command: Command) -> 
         Command::Fact { command } => fact(format, config_path, command),
         Command::Tag { command } => tag(format, config_path, command),
         Command::Followup { command } => followup(format, config_path, command),
+        Command::Affinity { command } => {
+            crate::affinity_commands::run(format, config_path, command)
+        }
         Command::Query(args) => query_entities(format, config_path, args),
         Command::History(args) => crate::history_commands::run(format, config_path, args),
         Command::Explain(args) => crate::analytics_commands::explain(format, config_path, args),

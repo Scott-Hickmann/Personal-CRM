@@ -25,6 +25,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
         include_str!("../migrations/010_participant_person_index.sql"),
     ),
     (11, include_str!("../migrations/011_gmail_people_sync.sql")),
+    (12, include_str!("../migrations/012_hybrid_affinity.sql")),
 ];
 
 pub fn open(path: &Path) -> Result<Connection> {
@@ -89,6 +90,53 @@ mod tests {
         let path = directory.path().join("crm.sqlite3");
         drop(open(&path).unwrap());
         let connection = open(&path).unwrap();
-        assert_eq!(schema_version(&connection).unwrap(), 11);
+        assert_eq!(schema_version(&connection).unwrap(), 12);
+    }
+
+    #[test]
+    fn hybrid_affinity_migration_invalidates_legacy_scores_and_requeues_analysis() {
+        let connection = Connection::open_in_memory().unwrap();
+        for (version, sql) in MIGRATIONS.iter().filter(|(version, _)| *version <= 11) {
+            connection.execute_batch(sql).unwrap();
+            assert_eq!(schema_version(&connection).unwrap(), *version);
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO sources(id, kind) VALUES ('source', 'test');
+                 INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state, affinity_score)
+                 VALUES ('person', 'Alex', 'apple-1', 'active', 99.0);
+                 INSERT INTO interactions(id, source_id, native_id, channel, kind, occurred_at, body, analysis_state)
+                 VALUES ('interaction', 'source', 'native', 'imessage', 'message', '2026-09-01', 'hello', 'complete');
+                 INSERT INTO metrics(person_id, behavioral_score, semantic_score, components_json)
+                 VALUES ('person', 90.0, 90.0, '{}');",
+            )
+            .unwrap();
+
+        migrate(&connection).unwrap();
+
+        let score: Option<f64> = connection
+            .query_row(
+                "SELECT affinity_score FROM people WHERE id='person'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let state: String = connection
+            .query_row(
+                "SELECT analysis_state FROM interactions WHERE id='interaction'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(schema_version(&connection).unwrap(), 12);
+        assert_eq!(score, None);
+        assert_eq!(state, "pending");
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM metrics", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
     }
 }

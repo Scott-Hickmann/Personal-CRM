@@ -13,13 +13,17 @@ pub fn explain(format: Format, config_path: PathBuf, args: PersonReference) -> R
     let person_id = repository::resolve_person_id(&connection, &args.person)?;
     let explanation = scoring::explain(&connection, &person_id)?;
     let table = format!(
-        "{}\naffinity   {:.1} ({})\nactivity   {}\nbehavior   {:.1}\nsemantic   {:.1}\n90d count  {}\nlast seen  {}",
+        "{}\naffinity    {:.1} ({})\nactivity    {}\nbehavior    {:.1}\nrelational  {:.1}\nrating      {}\n90d count   {}\nlast seen   {}",
         explanation.display_name,
         explanation.affinity_score,
         explanation.affinity_tier,
         explanation.activity_state,
         explanation.behavioral_score,
-        explanation.semantic_score,
+        explanation.relational_score,
+        explanation
+            .closeness_rating
+            .map(|rating| format!("{rating}/7"))
+            .unwrap_or_else(|| "unrated".into()),
         explanation.components.interactions_90d,
         explanation
             .components

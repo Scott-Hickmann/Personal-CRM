@@ -54,6 +54,7 @@ impl OllamaClient {
                 "model": self.config.generation_model,
                 "stream": false,
                 "think": false,
+                "options": {"temperature": 0},
                 "format": schema,
                 "messages": [
                     {"role": "system", "content": prompt},

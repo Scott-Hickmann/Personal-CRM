@@ -57,6 +57,10 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: FollowupCommand,
     },
+    Affinity {
+        #[command(subcommand)]
+        command: AffinityCommand,
+    },
     Query(QueryArgs),
     History(HistoryArgs),
     Explain(PersonReference),
@@ -296,6 +300,30 @@ pub(crate) enum TagCommand {
 #[derive(Subcommand)]
 pub(crate) enum FollowupCommand {
     Add(FollowupAddArgs),
+}
+
+#[derive(Subcommand)]
+pub(crate) enum AffinityCommand {
+    Rate(AffinityRateArgs),
+    Clear(AffinityClearArgs),
+}
+
+#[derive(Args)]
+pub(crate) struct AffinityRateArgs {
+    #[arg(long)]
+    pub person: String,
+    #[arg(long, value_parser = clap::value_parser!(u8).range(1..=7))]
+    pub rating: u8,
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+#[derive(Args)]
+pub(crate) struct AffinityClearArgs {
+    #[arg(long)]
+    pub person: String,
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(Args)]

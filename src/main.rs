@@ -1,3 +1,5 @@
+mod affinity_calibration;
+mod affinity_commands;
 mod analysis;
 mod analytics_commands;
 mod auth_commands;
@@ -33,6 +35,7 @@ mod photos_prompt;
 mod photos_review;
 mod progress;
 mod query;
+mod relationship_signals;
 mod repository;
 mod review;
 mod review_candidates;
