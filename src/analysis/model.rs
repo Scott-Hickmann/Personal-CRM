@@ -1,13 +1,7 @@
-use std::collections::HashSet;
-
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use crate::error::{CrmError, Result};
-
-#[derive(Debug, Serialize)]
-pub(super) struct AnalysisInput {
-    interactions: Vec<InputInteraction>,
-}
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct InputInteraction {
@@ -27,18 +21,37 @@ pub(super) struct InputParticipant {
     pub role: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize)]
+pub(super) struct ModelInteraction {
+    pub interaction_id: String,
+    pub channel: String,
+    pub occurred_at: String,
+    pub direction: Option<String>,
+    pub subject: Option<String>,
+    pub body: String,
+    pub participants: Vec<InputParticipant>,
+}
+
+#[derive(Debug)]
 pub(super) struct AnalysisOutput {
     pub items: Vec<OutputItem>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 pub(super) struct OutputItem {
     pub interaction_id: String,
     pub summary: String,
     pub is_personal: bool,
     pub mentions: Vec<OutputMention>,
     pub relationship_signals: Vec<OutputRelationshipSignal>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct ContentOutput {
+    pub interaction_id: String,
+    pub summary: String,
+    pub is_personal: bool,
+    pub mentions: Vec<OutputMention>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -61,108 +74,151 @@ pub(super) struct OutputRelationshipSignal {
     pub evidence: String,
 }
 
-pub(super) fn model_input(inputs: &[InputInteraction]) -> AnalysisInput {
-    AnalysisInput {
-        interactions: inputs
+pub(super) fn model_interaction(input: &InputInteraction) -> ModelInteraction {
+    ModelInteraction {
+        interaction_id: "item-0".into(),
+        channel: input.channel.clone(),
+        occurred_at: input.occurred_at.clone(),
+        direction: input.direction.clone(),
+        subject: input.subject.clone(),
+        body: input.body.clone(),
+        participants: input
+            .participants
             .iter()
             .enumerate()
-            .map(|(index, input)| InputInteraction {
-                interaction_id: format!("item-{index}"),
-                participants: input
-                    .participants
-                    .iter()
-                    .enumerate()
-                    .map(|(participant_index, participant)| InputParticipant {
-                        participant_id: format!("participant-{participant_index}"),
-                        display_name: participant.display_name.clone(),
-                        role: participant.role.clone(),
-                    })
-                    .collect(),
-                ..input.clone()
+            .map(|(index, participant)| InputParticipant {
+                participant_id: format!("participant-{index}"),
+                display_name: participant.display_name.clone(),
+                role: participant.role.clone(),
             })
             .collect(),
     }
 }
 
-pub(super) fn restore_ids(inputs: &[InputInteraction], output: &mut AnalysisOutput) -> Result<()> {
-    if output.items.len() != inputs.len() {
-        return Err(CrmError::Serialization(format!(
-            "Ollama returned {} items for {} interactions",
-            output.items.len(),
-            inputs.len()
+pub(super) fn relationship_input(model: &ModelInteraction, index: usize) -> Value {
+    json!({
+        "record": {
+            "interaction_id": model.interaction_id,
+            "channel": model.channel,
+            "occurred_at": model.occurred_at,
+            "direction": model.direction,
+            "subject": model.subject,
+            "body": model.body,
+        },
+        "participant": model.participants[index],
+    })
+}
+
+pub(super) fn validate_content(model: &ModelInteraction, output: &ContentOutput) -> Result<()> {
+    if output.interaction_id != model.interaction_id {
+        return Err(serialization(format!(
+            "Ollama returned content for {} instead of {}",
+            output.interaction_id, model.interaction_id
         )));
     }
-    let mut seen = HashSet::new();
-    for item in &mut output.items {
-        let index = short_index(&item.interaction_id, "item-", inputs.len()).ok_or_else(|| {
-            CrmError::Serialization(format!(
-                "Ollama returned unknown interaction id {}",
-                item.interaction_id
-            ))
-        })?;
-        if !seen.insert(index) {
-            return Err(CrmError::Serialization(format!(
-                "Ollama returned duplicate interaction id {}",
-                item.interaction_id
-            )));
+    for mention in &output.mentions {
+        if !in_range(mention.confidence, 0.0, 1.0) {
+            return Err(serialization("Ollama returned invalid mention confidence"));
         }
-        restore_participant_ids(&inputs[index], item)?;
-        item.interaction_id = inputs[index].interaction_id.clone();
     }
     Ok(())
 }
 
-fn restore_participant_ids(input: &InputInteraction, item: &mut OutputItem) -> Result<()> {
-    let mut seen = HashSet::new();
-    for signal in &mut item.relationship_signals {
-        let index = short_index(
-            &signal.participant_id,
-            "participant-",
-            input.participants.len(),
-        )
-        .ok_or_else(|| {
-            CrmError::Serialization(format!(
-                "Ollama returned unknown participant id {} for {}",
-                signal.participant_id, item.interaction_id
-            ))
-        })?;
-        if !seen.insert(index) {
-            return Err(CrmError::Serialization(format!(
-                "Ollama returned duplicate participant id {} for {}",
-                signal.participant_id, item.interaction_id
+pub(super) fn validate_relationship(
+    model: &ModelInteraction,
+    index: usize,
+    output: &OutputRelationshipSignal,
+) -> Result<()> {
+    let expected = &model.participants[index].participant_id;
+    if output.participant_id != *expected {
+        return Err(serialization(format!(
+            "Ollama returned relationship for {} instead of {expected}",
+            output.participant_id
+        )));
+    }
+    for (name, value) in [
+        ("intimacy", output.intimacy),
+        ("emotional_support", output.emotional_support),
+        ("practical_support", output.practical_support),
+        ("affection", output.affection),
+        ("shared_activity", output.shared_activity),
+        ("conflict_repair", output.conflict_repair),
+    ] {
+        if !in_range(value, 0.0, 3.0) || value.fract() != 0.0 {
+            return Err(serialization(format!(
+                "Ollama returned invalid {name} score for {expected}"
             )));
         }
-        signal.participant_id = input.participants[index].participant_id.clone();
     }
-    if seen.len() != input.participants.len() {
-        return Err(CrmError::Serialization(format!(
-            "Ollama returned {} relationship assessments for {} participants in {}",
-            seen.len(),
-            input.participants.len(),
-            item.interaction_id
+    if !in_range(output.confidence, 0.0, 1.0) {
+        return Err(serialization(format!(
+            "Ollama returned invalid confidence for {expected}"
         )));
     }
     Ok(())
 }
 
-fn short_index(value: &str, prefix: &str, len: usize) -> Option<usize> {
-    value
-        .strip_prefix(prefix)
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|index| *index < len)
+pub(super) fn normalize_relationship(output: &mut OutputRelationshipSignal) {
+    let all_zero = [
+        output.intimacy,
+        output.emotional_support,
+        output.practical_support,
+        output.affection,
+        output.shared_activity,
+        output.conflict_repair,
+    ]
+    .into_iter()
+    .all(|value| value == 0.0);
+    if all_zero {
+        output.evidence.clear();
+    }
+}
+
+pub(super) fn combine(
+    input: &InputInteraction,
+    content: ContentOutput,
+    mut relationships: Vec<OutputRelationshipSignal>,
+) -> Result<AnalysisOutput> {
+    if relationships.len() != input.participants.len() {
+        return Err(serialization(
+            "relationship result count changed during analysis",
+        ));
+    }
+    for (index, signal) in relationships.iter_mut().enumerate() {
+        signal
+            .participant_id
+            .clone_from(&input.participants[index].participant_id);
+    }
+    Ok(AnalysisOutput {
+        items: vec![OutputItem {
+            interaction_id: input.interaction_id.clone(),
+            summary: content.summary,
+            is_personal: content.is_personal,
+            mentions: content.mentions,
+            relationship_signals: relationships,
+        }],
+    })
+}
+
+fn in_range(value: f64, minimum: f64, maximum: f64) -> bool {
+    value.is_finite() && value >= minimum && value <= maximum
+}
+
+fn serialization(message: impl Into<String>) -> CrmError {
+    CrmError::Serialization(message.into())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn input(id: &str) -> InputInteraction {
+    fn input() -> InputInteraction {
         InputInteraction {
-            interaction_id: id.into(),
-            channel: "whatsapp".into(),
-            occurred_at: "2026-01-01 00:00:00".into(),
-            direction: None,
-            subject: None,
+            interaction_id: "database-id".into(),
+            channel: "gmail".into(),
+            occurred_at: "2026-01-01".into(),
+            direction: Some("incoming".into()),
+            subject: Some("hello".into()),
             body: "hello".into(),
             participants: vec![InputParticipant {
                 participant_id: "person-id".into(),
@@ -172,51 +228,48 @@ mod tests {
         }
     }
 
-    fn output(id: &str) -> OutputItem {
-        OutputItem {
-            interaction_id: id.into(),
-            summary: "hello".into(),
-            is_personal: true,
-            mentions: Vec::new(),
-            relationship_signals: vec![OutputRelationshipSignal {
-                participant_id: "participant-0".into(),
-                intimacy: 0.0,
-                emotional_support: 0.0,
-                practical_support: 0.0,
-                affection: 0.0,
-                shared_activity: 0.0,
-                conflict_repair: 0.0,
-                confidence: 1.0,
-                evidence: String::new(),
-            }],
-        }
+    #[test]
+    fn shortens_ids_for_model_calls() {
+        let model = model_interaction(&input());
+
+        assert_eq!(model.interaction_id, "item-0");
+        assert_eq!(model.participants[0].participant_id, "participant-0");
     }
 
     #[test]
-    fn restores_short_model_ids_to_exact_database_ids() {
-        let inputs = vec![input("long-uuid-one"), input("long-uuid-two")];
-        let model = model_input(&inputs);
-        assert_eq!(model.interactions[0].interaction_id, "item-0");
-
-        let mut result = AnalysisOutput {
-            items: vec![output("item-1"), output("item-0")],
+    fn rejects_relationship_for_the_wrong_participant() {
+        let model = model_interaction(&input());
+        let output = OutputRelationshipSignal {
+            participant_id: "participant-1".into(),
+            intimacy: 0.0,
+            emotional_support: 0.0,
+            practical_support: 0.0,
+            affection: 0.0,
+            shared_activity: 0.0,
+            conflict_repair: 0.0,
+            confidence: 1.0,
+            evidence: String::new(),
         };
-        restore_ids(&inputs, &mut result).unwrap();
 
-        assert_eq!(result.items[0].interaction_id, "long-uuid-two");
-        assert_eq!(
-            result.items[0].relationship_signals[0].participant_id,
-            "person-id"
-        );
+        assert!(validate_relationship(&model, 0, &output).is_err());
     }
 
     #[test]
-    fn rejects_duplicate_short_model_ids() {
-        let inputs = vec![input("one"), input("two")];
-        let mut result = AnalysisOutput {
-            items: vec![output("item-0"), output("item-0")],
+    fn clears_evidence_when_every_score_is_zero() {
+        let mut output = OutputRelationshipSignal {
+            participant_id: "participant-0".into(),
+            intimacy: 0.0,
+            emotional_support: 0.0,
+            practical_support: 0.0,
+            affection: 0.0,
+            shared_activity: 0.0,
+            conflict_repair: 0.0,
+            confidence: 1.0,
+            evidence: "No scored evidence".into(),
         };
 
-        assert!(restore_ids(&inputs, &mut result).is_err());
+        normalize_relationship(&mut output);
+
+        assert!(output.evidence.is_empty());
     }
 }

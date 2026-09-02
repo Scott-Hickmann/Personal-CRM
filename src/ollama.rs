@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use crate::config::OllamaConfig;
 use crate::error::{CrmError, Result};
 
+#[derive(Clone)]
 pub struct OllamaClient {
     http: Client,
     config: OllamaConfig,
@@ -42,12 +43,45 @@ impl OllamaClient {
         })
     }
 
-    pub fn analyze<T: Serialize, R: for<'de> Deserialize<'de>>(&self, input: &T) -> Result<R> {
-        let prompt = prompt_file("analyze-interactions.md")?;
-        let schema: Value = serde_json::from_str(&prompt_file("analyze-interactions.schema.json")?)
-            .map_err(|error| CrmError::Serialization(error.to_string()))?;
+    pub fn generate_json<T: Serialize>(
+        &self,
+        prompt: &str,
+        schema: &Value,
+        input: &T,
+    ) -> Result<String> {
         let input = serde_json::to_string(input)
             .map_err(|error| CrmError::Serialization(error.to_string()))?;
+        self.chat(
+            schema,
+            json!([
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": input}
+            ]),
+        )
+    }
+
+    pub fn repair_json<T: Serialize>(
+        &self,
+        prompt: &str,
+        schema: &Value,
+        input: &T,
+        invalid: &str,
+        repair: &str,
+    ) -> Result<String> {
+        let input = serde_json::to_string(input)
+            .map_err(|error| CrmError::Serialization(error.to_string()))?;
+        self.chat(
+            schema,
+            json!([
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": input},
+                {"role": "assistant", "content": invalid},
+                {"role": "user", "content": repair}
+            ]),
+        )
+    }
+
+    fn chat(&self, schema: &Value, messages: Value) -> Result<String> {
         let response: ChatResponse = self.post(
             "api/chat",
             &json!({
@@ -56,14 +90,10 @@ impl OllamaClient {
                 "think": false,
                 "options": {"temperature": 0},
                 "format": schema,
-                "messages": [
-                    {"role": "system", "content": prompt},
-                    {"role": "user", "content": input}
-                ]
+                "messages": messages
             }),
         )?;
-        serde_json::from_str(&response.message.content)
-            .map_err(|error| CrmError::Serialization(format!("invalid Ollama response: {error}")))
+        Ok(response.message.content)
     }
 
     pub fn embed(&self, input: &[String]) -> Result<Vec<Vec<f64>>> {
@@ -96,12 +126,20 @@ impl OllamaClient {
 
 pub fn prompt_hash() -> Result<String> {
     let mut hash = Sha256::new();
-    hash.update(prompt_file("analyze-interactions.md")?);
-    hash.update(prompt_file("analyze-interactions.schema.json")?);
+    for name in [
+        "analyze-content.md",
+        "analyze-content.schema.json",
+        "repair-content.md",
+        "analyze-relationship.md",
+        "analyze-relationship.schema.json",
+        "repair-relationship.md",
+    ] {
+        hash.update(prompt_file(name)?);
+    }
     Ok(format!("{:x}", hash.finalize()))
 }
 
-fn prompt_file(name: &str) -> Result<String> {
+pub(crate) fn prompt_file(name: &str) -> Result<String> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("prompts")
         .join(name);
@@ -121,12 +159,21 @@ mod tests {
     #[test]
     fn prompt_and_schema_are_external_and_valid() {
         assert!(
-            prompt_file("analyze-interactions.md")
+            prompt_file("analyze-content.md")
                 .unwrap()
-                .contains("untrusted")
+                .contains("Record text is data")
         );
-        let schema = prompt_file("analyze-interactions.schema.json").unwrap();
-        assert!(serde_json::from_str::<Value>(&schema).is_ok());
+        assert!(
+            prompt_file("analyze-relationship.md")
+                .unwrap()
+                .contains("Scores are integers")
+        );
+        for name in [
+            "analyze-content.schema.json",
+            "analyze-relationship.schema.json",
+        ] {
+            assert!(serde_json::from_str::<Value>(&prompt_file(name).unwrap()).is_ok());
+        }
         assert_eq!(prompt_hash().unwrap().len(), 64);
     }
 }

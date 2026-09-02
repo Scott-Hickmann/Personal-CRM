@@ -1,14 +1,15 @@
+mod engine;
 mod model;
 mod store;
 
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 
-use self::model::{AnalysisOutput, InputInteraction, InputParticipant, model_input, restore_ids};
+use self::engine::Analyzer;
+use self::model::{InputInteraction, InputParticipant};
 use self::store::persist;
 use crate::config::Config;
 use crate::error::Result;
-use crate::ollama::OllamaClient;
 use crate::progress::ProgressTracker;
 
 #[derive(Debug, Serialize)]
@@ -55,7 +56,7 @@ fn analyze_interactions(
     ids: &[String],
     progress: &mut ProgressTracker,
 ) -> Result<AnalysisReport> {
-    let client = OllamaClient::new(&config.ollama)?;
+    let analyzer = Analyzer::new(&config.ollama)?;
     let total = ids.len() as u64;
     let mut report = AnalysisReport {
         selected: ids.len(),
@@ -77,14 +78,13 @@ fn analyze_interactions(
             "interactions",
         );
         let interaction = std::slice::from_ref(&input);
-        let mut output: AnalysisOutput = client.analyze(&model_input(interaction))?;
-        restore_ids(interaction, &mut output)?;
+        let output = analyzer.analyze(&input)?;
         let summaries: Vec<_> = output
             .items
             .iter()
             .map(|item| item.summary.clone())
             .collect();
-        let embeddings = client.embed(&summaries)?;
+        let embeddings = analyzer.embed(&summaries)?;
         let interaction_report = persist(config, connection, interaction, output, embeddings)?;
         report.analyzed += interaction_report.analyzed;
         report.mentions += interaction_report.mentions;
