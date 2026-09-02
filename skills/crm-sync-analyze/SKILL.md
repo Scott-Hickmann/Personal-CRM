@@ -1,6 +1,6 @@
 ---
 name: crm-sync-analyze
-description: Diagnose or manually refresh the daemon-managed personal CRM. Use when checking daemon health, retrying a failed source job, or explicitly refreshing iCloud Contacts, communications, Gmail, local analysis, scores, Photos, or Google mirrors.
+description: Diagnose or manually refresh the daemon-managed personal CRM. Use when checking daemon health, retrying a failed source job, or explicitly refreshing iCloud Contacts, local communication sources, Gmail, local analysis, scores, Photos, or Google mirrors.
 ---
 
 # CRM Sync and Analyze
@@ -20,7 +20,10 @@ The launchd-managed CRM daemon normally handles synchronization and analysis. Us
 
 ```sh
 /Users/scotthickmann/.local/bin/crm --format json run contacts
-/Users/scotthickmann/.local/bin/crm --format json run communications
+/Users/scotthickmann/.local/bin/crm --format json run imessage
+/Users/scotthickmann/.local/bin/crm --format json run whatsapp
+/Users/scotthickmann/.local/bin/crm --format json run apple-calls
+/Users/scotthickmann/.local/bin/crm --format json run whatsapp-calls
 /Users/scotthickmann/.local/bin/crm --format json run gmail
 /Users/scotthickmann/.local/bin/crm --format json run analysis
 /Users/scotthickmann/.local/bin/crm --format json run scoring
@@ -32,7 +35,7 @@ The launchd-managed CRM daemon normally handles synchronization and analysis. Us
 
 ## Targeted synchronization
 
-Use `run contacts`, `run communications`, `run gmail`, `run analysis`, `run scoring`, `run photos`, `run google-publish`, or `run suggestions`. Prefer `crm start` over creating a scheduled Codex automation.
+Use `run contacts`, `run imessage`, `run whatsapp`, `run apple-calls`, `run whatsapp-calls`, `run gmail`, `run analysis`, `run scoring`, `run photos`, `run google-publish`, or `run suggestions`. Prefer `crm start` over creating a scheduled Codex automation.
 
 ## Failure handling
 

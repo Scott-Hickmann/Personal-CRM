@@ -77,7 +77,7 @@ crm auth gmail remove account@example.com
 
 Refresh tokens are stored in macOS Keychain, not the configuration file. Gmail access uses the read-only scope and GET requests only. Gmail is treated as relationship evidence rather than a mailbox archive: historical searches cover messages involving active iCloud-contact email addresses, while contact discovery considers only direct outgoing mail from the last two years. Discovery messages are checked as header metadata first, and bodies are retrieved only after the message qualifies. Spam, Trash, Drafts, Promotions, Social, Forums, mailing lists, automated senders, and bulk mail are excluded before storage or analysis. Unknown incoming-only senders are ignored. All configured self email addresses are treated equally, including work and personal addresses.
 
-The initial people-focused backfill is checkpointed by contact search and processes at most 50 message payloads per account in each daemon job. Completed searches and messages survive sleep, network loss, and daemon restarts. The daemon interleaves additional Gmail batches with review and bounded local analysis; subsequent mailbox updates use Gmail history rather than repeating the backfill.
+The initial people-focused backfill is checkpointed by contact search and processes at most 50 message payloads per account in each daemon job. Completed searches and messages survive sleep, network loss, and daemon restarts. The daemon interleaves additional Gmail batches with review and local analysis; subsequent mailbox updates use Gmail history rather than repeating the backfill.
 
 ## Configure authoritative contacts and Google mirrors
 
@@ -131,7 +131,7 @@ crm review
 crm stop
 ```
 
-`crm status --live` shows the active job, its current stage, and exact `x/n` progress for contacts, contact searches, messages, interactions, people, actions, and candidates. During Gmail backfill it reports completed contact searches, the queued message count, and kept-versus-excluded totals for the current batch.
+`crm status --live` shows every active job, its current stage, and exact `x/n` progress for contacts, contact searches, messages, interactions, people, actions, and candidates. During Gmail backfill it reports completed contact searches, the queued message count, and kept-versus-excluded totals for the current batch.
 
 ## Local web companion
 
@@ -144,13 +144,18 @@ crm ui --port 3100
 
 The CLI starts `pnpm dev` in [`web/`](web/), binds it to the loopback interface only, and passes its own executable and active config path to the server. The app never opens the CRM database directly: contact search, detail views, interaction reveals, relationship graphs, notes, facts, tags, follow-ups, and closeness ratings all execute through Rust CLI JSON commands. Message bodies appear as previews until explicitly revealed. The relationship page renders the complete inferred network in Cytoscape and supports person, type, confidence, affinity-tier, activity, and layout filters.
 
-The daemon watches the selected iCloud Contacts database, iMessage, WhatsApp, and call-history databases with a short debounce. It polls Gmail history every minute and reconciles Photos periodically. New interactions trigger bounded, debounced Ollama analysis followed by deterministic scoring. Jobs are coalesced in SQLite, survive restarts, and retry failures.
+The daemon watches the selected iCloud Contacts database, iMessage, WhatsApp, call-history, and Photos databases with a short debounce. Independent workers let those sources, Gmail, and local Ollama analysis make progress concurrently; each workstream remains single-flight. Gmail history is polled every minute and linked Photos people are reconciled every five minutes as a fallback. New interactions trigger Ollama analysis immediately, and each analysis run drains the complete pending snapshot before deterministic scoring runs. Jobs are coalesced in SQLite, changes arriving during a running job cause a follow-up pass, interrupted work survives restarts, and failures retry automatically.
+
+iMessage, WhatsApp, Apple calls, and WhatsApp calls keep durable high-water checkpoints. Normal runs read only new rows plus a 1,000-row overlap for late edits. A daily full audit catches hard deletions that these local databases do not expose through a portable change feed. Contacts uses Core Data row versions as a lightweight change token when available, falling back to a full authoritative snapshot when the installed schema cannot provide one. Automatic Photos reconciliation queries only people already linked by UUID rather than loading every named Photos person.
 
 Manual recovery uses one command surface:
 
 ```sh
 crm run contacts
-crm run communications
+crm run imessage
+crm run whatsapp
+crm run apple-calls
+crm run whatsapp-calls
 crm run gmail
 crm run analysis
 crm run scoring
@@ -159,7 +164,7 @@ crm run google-publish
 crm run suggestions
 ```
 
-Analysis sends one interaction at a time to the configured local Ollama server. Each result is persisted before the next interaction begins, so interrupted work resumes from the remaining records. The editable prompt and response schema are in [`prompts/`](prompts/). There is intentionally no remote or alternate-model fallback: analysis fails when Ollama or a configured model is unavailable.
+Analysis snapshots every eligible pending interaction, then sends them one at a time to the configured local Ollama server. Each result is persisted before the next interaction begins, so interrupted work resumes from the remaining records. Interactions imported during a running analysis cause an immediate follow-up pass; scoring waits until that follow-up work is drained. The editable prompt and response schema are in [`prompts/`](prompts/). There is intentionally no remote or alternate-model fallback: analysis fails when Ollama or a configured model is unavailable.
 
 ## People and manual information
 
