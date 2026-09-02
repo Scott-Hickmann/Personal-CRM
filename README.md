@@ -132,7 +132,7 @@ crm run google-publish
 crm run suggestions
 ```
 
-Analysis sends bounded batches only to the configured local Ollama server. The editable prompt and response schema are in [`prompts/`](prompts/). There is intentionally no remote or alternate-model fallback: analysis fails when Ollama or a configured model is unavailable.
+Analysis sends one interaction at a time to the configured local Ollama server. Each result is persisted before the next interaction begins, so interrupted work resumes from the remaining records. The editable prompt and response schema are in [`prompts/`](prompts/). There is intentionally no remote or alternate-model fallback: analysis fails when Ollama or a configured model is unavailable.
 
 ## People and manual information
 

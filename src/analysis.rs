@@ -11,8 +11,6 @@ use crate::error::{CrmError, Result};
 use crate::ollama::OllamaClient;
 use crate::progress::ProgressTracker;
 
-const BATCH_SIZE: usize = 10;
-
 #[derive(Debug, Serialize)]
 pub struct AnalysisReport {
     pub selected: usize,
@@ -54,10 +52,10 @@ pub fn run(
             relationship_signals: 0,
         });
     }
-    analyze_batches(config, connection, &inputs, progress)
+    analyze_interactions(config, connection, &inputs, progress)
 }
 
-fn analyze_batches(
+fn analyze_interactions(
     config: &Config,
     connection: &Connection,
     inputs: &[InputInteraction],
@@ -65,7 +63,6 @@ fn analyze_batches(
 ) -> Result<AnalysisReport> {
     let client = OllamaClient::new(&config.ollama)?;
     let total = inputs.len() as u64;
-    let batch_count = inputs.len().div_ceil(BATCH_SIZE);
     let mut report = AnalysisReport {
         selected: inputs.len(),
         analyzed: 0,
@@ -74,30 +71,28 @@ fn analyze_batches(
         relationship_signals: 0,
     };
     progress.stage("Analyzing interactions", 2, 2, total, false, "interactions");
-    for (batch_index, batch) in inputs.chunks(BATCH_SIZE).enumerate() {
+    for (index, input) in inputs.iter().enumerate() {
         progress.progress_now(
-            format!(
-                "Analyzing interactions (batch {} of {batch_count})",
-                batch_index + 1
-            ),
+            format!("Analyzing interaction {} of {total}", index + 1),
             report.analyzed as u64,
             total,
             false,
             "interactions",
         );
-        let mut output: AnalysisOutput = client.analyze(&model_input(batch))?;
-        restore_ids(batch, &mut output)?;
+        let interaction = std::slice::from_ref(input);
+        let mut output: AnalysisOutput = client.analyze(&model_input(interaction))?;
+        restore_ids(interaction, &mut output)?;
         let summaries: Vec<_> = output
             .items
             .iter()
             .map(|item| item.summary.clone())
             .collect();
         let embeddings = client.embed(&summaries)?;
-        let batch_report = persist(config, connection, batch, output, embeddings)?;
-        report.analyzed += batch_report.analyzed;
-        report.mentions += batch_report.mentions;
-        report.relationships += batch_report.relationships;
-        report.relationship_signals += batch_report.relationship_signals;
+        let interaction_report = persist(config, connection, interaction, output, embeddings)?;
+        report.analyzed += interaction_report.analyzed;
+        report.mentions += interaction_report.mentions;
+        report.relationships += interaction_report.relationships;
+        report.relationship_signals += interaction_report.relationship_signals;
         progress.progress(
             "Analyzing interactions",
             report.analyzed as u64,
