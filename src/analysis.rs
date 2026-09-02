@@ -181,6 +181,11 @@ fn pending(connection: &Connection, limit: u32) -> Result<Vec<InputInteraction>>
         "SELECT id, channel, occurred_at, direction, subject, body
          FROM interactions
          WHERE analysis_state='pending' AND deleted_at IS NULL AND body IS NOT NULL AND trim(body) != ''
+           AND EXISTS (
+             SELECT 1 FROM interaction_participants ip JOIN people p ON p.id=ip.person_id
+             WHERE ip.interaction_id=interactions.id AND p.lifecycle_state='active'
+               AND p.apple_contact_id IS NOT NULL
+           )
          ORDER BY occurred_at DESC LIMIT ?1",
     )?;
     Ok(statement
@@ -196,6 +201,25 @@ fn pending(connection: &Connection, limit: u32) -> Result<Vec<InputInteraction>>
             })
         })?
         .collect::<std::result::Result<_, _>>()?)
+}
+
+pub(crate) fn has_pending(connection: &Connection) -> Result<bool> {
+    connection
+        .query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM interactions
+               WHERE analysis_state='pending' AND deleted_at IS NULL
+                 AND body IS NOT NULL AND trim(body) != ''
+                 AND EXISTS (
+                   SELECT 1 FROM interaction_participants ip JOIN people p ON p.id=ip.person_id
+                   WHERE ip.interaction_id=interactions.id AND p.lifecycle_state='active'
+                     AND p.apple_contact_id IS NOT NULL
+                 )
+             )",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(Into::into)
 }
 
 fn persist(
@@ -277,7 +301,7 @@ fn persist(
                 serde_json::to_string(&embedding).map_err(serialization)?, config.ollama.embedding_model,
                 prompt_hash],
         )?;
-        if input.channel == "email" && !item.is_personal {
+        if matches!(input.channel.as_str(), "email" | "gmail") && !item.is_personal {
             transaction.execute(
                 "UPDATE interactions SET body=NULL WHERE id=?1",
                 [&item.interaction_id],
@@ -417,5 +441,37 @@ mod tests {
         };
 
         assert!(restore_interaction_ids(&inputs, &mut result).is_err());
+    }
+
+    #[test]
+    fn selects_only_interactions_linked_to_active_icloud_people() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = crate::db::open(&directory.path().join("crm.sqlite3")).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO sources(id, kind) VALUES ('gmail', 'gmail');
+                 INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state)
+                 VALUES ('person', 'Alex', 'apple-1', 'active');
+                 INSERT INTO interactions(id, source_id, native_id, channel, kind, occurred_at, body)
+                 VALUES ('linked', 'gmail', 'linked', 'gmail', 'email', '2026-01-01', 'hello'),
+                        ('unknown', 'gmail', 'unknown', 'gmail', 'email', '2026-01-01', 'hello');
+                 INSERT INTO interaction_participants(interaction_id, person_id, identity_value, role)
+                 VALUES ('linked', 'person', 'alex@example.com', 'sender'),
+                        ('unknown', NULL, 'unknown@example.com', 'sender');",
+            )
+            .unwrap();
+
+        let selected = pending(&connection, 100).unwrap();
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].interaction_id, "linked");
+        assert!(has_pending(&connection).unwrap());
+        connection
+            .execute(
+                "UPDATE interactions SET analysis_state='complete' WHERE id='linked'",
+                [],
+            )
+            .unwrap();
+        assert!(!has_pending(&connection).unwrap());
     }
 }

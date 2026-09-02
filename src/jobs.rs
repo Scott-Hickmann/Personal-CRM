@@ -168,7 +168,7 @@ fn enqueue_downstream(connection: &Connection, kind: JobKind) -> Result<()> {
                 Duration::zero(),
             )?;
         }
-        JobKind::Communications | JobKind::Gmail => {
+        JobKind::Communications => {
             enqueue(
                 connection,
                 JobKind::Analysis,
@@ -182,12 +182,44 @@ fn enqueue_downstream(connection: &Connection, kind: JobKind) -> Result<()> {
                 Duration::zero(),
             )?;
         }
-        JobKind::Analysis => enqueue(
-            connection,
-            JobKind::Scoring,
-            "analysis complete",
-            Duration::zero(),
-        )?,
+        JobKind::Gmail => {
+            enqueue(
+                connection,
+                JobKind::Analysis,
+                "new interactions",
+                Duration::seconds(30),
+            )?;
+            enqueue(
+                connection,
+                JobKind::Suggestions,
+                "new participants",
+                Duration::zero(),
+            )?;
+            if crate::sync::gmail_backfill_pending(connection)? {
+                enqueue(
+                    connection,
+                    JobKind::Gmail,
+                    "people-focused backfill pending",
+                    Duration::seconds(2),
+                )?;
+            }
+        }
+        JobKind::Analysis => {
+            enqueue(
+                connection,
+                JobKind::Scoring,
+                "analysis complete",
+                Duration::zero(),
+            )?;
+            if crate::analysis::has_pending(connection)? {
+                enqueue(
+                    connection,
+                    JobKind::Analysis,
+                    "more interactions await analysis",
+                    Duration::seconds(2),
+                )?;
+            }
+        }
         _ => {}
     }
     Ok(())
@@ -265,5 +297,30 @@ mod tests {
             )
             .unwrap();
         assert_eq!(unresolved_failed_count(&connection).unwrap(), 1);
+    }
+
+    #[test]
+    fn continues_resumable_gmail_backfill_after_each_batch() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO sources(id, kind, last_sync_at)
+                 VALUES ('gmail:test', 'gmail', CURRENT_TIMESTAMP);
+                 INSERT INTO gmail_sync_scopes(source_id, scope_key, kind, query)
+                 VALUES ('gmail:test', 'contact:test', 'contact', 'from:test@example.com');",
+            )
+            .unwrap();
+
+        enqueue_downstream(&connection, JobKind::Gmail).unwrap();
+
+        let gmail_jobs: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM jobs WHERE kind='gmail' AND state='queued'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(gmail_jobs, 1);
     }
 }

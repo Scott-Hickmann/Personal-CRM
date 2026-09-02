@@ -1,7 +1,10 @@
 mod calls;
 mod contacts;
 mod gmail;
-mod gmail_message;
+mod gmail_backfill;
+mod gmail_import;
+pub(crate) mod gmail_message;
+mod gmail_store;
 mod imessage;
 mod whatsapp;
 mod whatsapp_identity;
@@ -72,11 +75,13 @@ pub(crate) fn run_with_progress(
         transaction.commit()?;
     }
     if matches!(target, SyncTarget::Gmail) && !config.gmail.accounts.is_empty() {
-        let transaction = crm.unchecked_transaction()?;
-        reports.extend(gmail::sync(config, &transaction, progress)?);
-        transaction.commit()?;
+        reports.extend(gmail::sync(config, crm, progress)?);
     }
     Ok(reports)
+}
+
+pub(crate) fn gmail_backfill_pending(crm: &Connection) -> Result<bool> {
+    gmail_backfill::has_pending(crm)
 }
 
 fn open_source(

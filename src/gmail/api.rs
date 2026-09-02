@@ -1,5 +1,7 @@
 use std::fs;
 use std::path::Path;
+use std::thread;
+use std::time::Duration;
 
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -75,23 +77,39 @@ impl ApiClient {
         } else {
             format!("https://gmail.googleapis.com/gmail/v1/users/me/{path}")
         };
-        let response = self
-            .http
-            .get(url)
-            .bearer_auth(&self.access_token)
-            .send()
-            .map_err(network_error)?;
-        if response.status() == reqwest::StatusCode::NOT_FOUND {
-            return Ok(ApiResponse::NotFound);
+        for attempt in 0..5 {
+            let response = match self.http.get(&url).bearer_auth(&self.access_token).send() {
+                Ok(response) => response,
+                Err(_) if attempt < 4 => {
+                    thread::sleep(retry_delay(attempt));
+                    continue;
+                }
+                Err(error) => return Err(network_error(error)),
+            };
+            if response.status() == reqwest::StatusCode::NOT_FOUND {
+                return Ok(ApiResponse::NotFound);
+            }
+            if (response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
+                || response.status().is_server_error())
+                && attempt < 4
+            {
+                thread::sleep(retry_delay(attempt));
+                continue;
+            }
+            return Ok(ApiResponse::Data(
+                response
+                    .error_for_status()
+                    .map_err(network_error)?
+                    .json()
+                    .map_err(network_error)?,
+            ));
         }
-        Ok(ApiResponse::Data(
-            response
-                .error_for_status()
-                .map_err(network_error)?
-                .json()
-                .map_err(network_error)?,
-        ))
+        unreachable!("bounded Gmail retry loop always returns")
     }
+}
+
+fn retry_delay(attempt: u32) -> Duration {
+    Duration::from_secs(1_u64 << attempt)
 }
 
 #[derive(Deserialize)]
@@ -105,8 +123,6 @@ pub struct MessageList {
     #[serde(default)]
     pub messages: Vec<MessageRef>,
     pub next_page_token: Option<String>,
-    #[serde(default)]
-    pub result_size_estimate: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -122,7 +138,6 @@ pub struct GmailMessage {
     #[serde(default)]
     pub label_ids: Vec<String>,
     pub internal_date: String,
-    pub history_id: String,
     pub payload: MessagePart,
 }
 
@@ -187,6 +202,8 @@ pub struct HistoryMessage {
 pub struct Profile {
     #[serde(rename = "emailAddress")]
     pub email_address: String,
+    #[serde(default, rename = "historyId")]
+    pub history_id: String,
 }
 
 pub(crate) fn network_error(error: reqwest::Error) -> CrmError {
@@ -201,11 +218,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reads_message_count_estimate() {
-        let list: MessageList =
-            serde_json::from_str(r#"{"messages":[{"id":"one"}],"resultSizeEstimate":20280}"#)
+    fn reads_profile_history_checkpoint() {
+        let profile: Profile =
+            serde_json::from_str(r#"{"emailAddress":"me@example.com","historyId":"20280"}"#)
                 .unwrap();
-        assert_eq!(list.messages.len(), 1);
-        assert_eq!(list.result_size_estimate, 20_280);
+        assert_eq!(profile.history_id, "20280");
     }
 }
