@@ -1,9 +1,6 @@
-use std::io::{IsTerminal, Write};
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
-use std::thread;
-use std::time::Duration;
 
-use chrono::{DateTime, Local};
 use rusqlite::Connection;
 use serde::Serialize;
 
@@ -11,6 +8,8 @@ use crate::cli::StatusArgs;
 use crate::error::{CrmError, Result};
 use crate::output::{self, Format};
 use crate::progress::ProgressSnapshot;
+
+mod live;
 
 #[derive(Serialize)]
 pub(crate) struct Status {
@@ -34,7 +33,7 @@ pub(crate) struct Status {
 }
 
 #[derive(Serialize)]
-struct SourceStatus {
+pub(super) struct SourceStatus {
     id: String,
     status: String,
     cursor: Option<String>,
@@ -91,16 +90,7 @@ fn live(format: Format, config_path: &Path, connection: &Connection) -> Result<(
             "`crm status --live` requires an interactive terminal".into(),
         ));
     }
-    loop {
-        let status = collect(config_path, connection)?;
-        let screen = live_screen(&status);
-        print!("\x1b[H\x1b[2J{screen}");
-        std::io::stdout().flush().map_err(|source| CrmError::Io {
-            path: PathBuf::from("stdout"),
-            source,
-        })?;
-        thread::sleep(Duration::from_millis(500));
-    }
+    live::run(|| collect(config_path, connection))
 }
 
 fn collect(config_path: &Path, connection: &Connection) -> Result<Status> {
@@ -222,75 +212,7 @@ fn summary(status: &Status) -> String {
     output
 }
 
-fn live_screen(status: &Status) -> String {
-    let mut output = format!("CRM live status — Ctrl-C to exit\n\n{}", summary(status));
-    output.push_str("\n\nCurrent activity\n");
-    if !status.daemon_running {
-        output.push_str("Daemon is stopped; no live activity.");
-    } else if !status.running_activity.is_empty() {
-        for progress in &status.running_activity {
-            output.push_str(&format!(
-                "{}  {}",
-                progress.job_kind.as_deref().unwrap_or("job"),
-                progress.message
-            ));
-            if progress.state == "running" {
-                output.push_str(&format!(
-                    "\nStage {} / {}\n{}",
-                    progress.stage_current,
-                    progress.stage_total,
-                    progress_bar(progress)
-                ));
-            }
-            output.push_str("\n\n");
-        }
-        output.pop();
-        output.pop();
-    } else {
-        output.push_str("Waiting for work.");
-    }
-    let events: Vec<_> = status
-        .running_activity
-        .iter()
-        .flat_map(|progress| progress.events.iter())
-        .collect();
-    if !events.is_empty() {
-        output.push_str("\n\nRecent activity\n");
-        for event in events {
-            output.push_str(&format!("{}  {}\n", local_time(&event.at), event.message));
-        }
-        output.pop();
-    }
-    output.push('\n');
-    output
-}
-
-fn progress_bar(progress: &ProgressSnapshot) -> String {
-    const WIDTH: usize = 36;
-    let current = progress.current;
-    let total = progress.total.max(current);
-    let (filled, percent) = if total == 0 {
-        (WIDTH, 100)
-    } else {
-        let filled = ((current as f64 / total as f64) * WIDTH as f64).round() as usize;
-        let percent = (current.saturating_mul(100) / total).min(100);
-        (filled, percent)
-    };
-    let estimate = if progress.total_is_estimate { "~" } else { "" };
-    let unit = progress.unit.as_deref().unwrap_or("items");
-    format!(
-        "[{}{}] {} / {}{} {} ({}%)",
-        "█".repeat(filled),
-        "░".repeat(WIDTH - filled),
-        grouped(current),
-        estimate,
-        grouped(total),
-        unit,
-        percent
-    )
-}
-
-fn grouped(value: u64) -> String {
+pub(super) fn grouped(value: u64) -> String {
     let digits = value.to_string();
     let mut result = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, character) in digits.chars().enumerate() {
@@ -302,66 +224,9 @@ fn grouped(value: u64) -> String {
     result
 }
 
-fn local_time(value: &str) -> String {
-    DateTime::parse_from_rfc3339(value)
-        .map(|timestamp| {
-            timestamp
-                .with_timezone(&Local)
-                .format("%H:%M:%S")
-                .to_string()
-        })
-        .unwrap_or_else(|_| "--:--:--".into())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn renders_known_progress() {
-        let progress = ProgressSnapshot {
-            job_kind: Some("whatsapp".into()),
-            current: 1234,
-            total: 5000,
-            total_is_estimate: true,
-            unit: Some("emails".into()),
-            ..ProgressSnapshot::default()
-        };
-        let bar = progress_bar(&progress);
-        assert!(bar.contains("1,234 / ~5,000 emails (24%)"));
-    }
-
-    #[test]
-    fn zero_work_is_complete_without_an_indeterminate_bar() {
-        let progress = ProgressSnapshot {
-            current: 0,
-            total: 0,
-            unit: Some("messages".into()),
-            ..ProgressSnapshot::default()
-        };
-        assert!(progress_bar(&progress).contains("0 / 0 messages (100%)"));
-    }
-
-    #[test]
-    fn live_screen_shows_stage_and_exact_item_progress() {
-        let mut status = initialized("config.toml".into(), "crm.sqlite3".into(), 10);
-        status.daemon_running = true;
-        let progress = ProgressSnapshot {
-            state: "running".into(),
-            message: "Reading WhatsApp conversations".into(),
-            stage_current: 2,
-            stage_total: 4,
-            current: 25,
-            total: 100,
-            unit: Some("messages".into()),
-            ..ProgressSnapshot::default()
-        };
-        status.running_activity.push(progress);
-        let screen = live_screen(&status);
-        assert!(screen.contains("Stage 2 / 4"));
-        assert!(screen.contains("25 / 100 messages (25%)"));
-        assert!(!screen.contains("working"));
-    }
 
     #[test]
     fn groups_large_counts() {
