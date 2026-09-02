@@ -56,6 +56,7 @@ pub fn sync(
             imported: report.imported,
             deleted: report.deleted,
             schema_fingerprint: "gmail-api-v1-people-focused".into(),
+            changed: report.imported > 0 || report.deleted > 0,
         });
     }
     Ok(reports)

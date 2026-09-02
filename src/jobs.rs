@@ -151,15 +151,15 @@ pub fn ready(connection: &Connection) -> Result<Vec<(i64, JobKind)>> {
 
 pub fn process(config_path: &Path, id: i64) -> Result<bool> {
     let mut connection = crate::commands::open_database(config_path)?;
-    let job: Option<(String, i64)> = connection
+    let job: Option<(String, i64, String)> = connection
         .query_row(
-            "SELECT kind, attempts FROM jobs
+            "SELECT kind, attempts, reason FROM jobs
              WHERE id=?1 AND state='queued' AND run_after<=?2",
             params![id, Utc::now().to_rfc3339()],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()?;
-    let Some((kind, attempts)) = job else {
+    let Some((kind, attempts, reason)) = job else {
         return Ok(false);
     };
     if connection.execute(
@@ -173,7 +173,7 @@ pub fn process(config_path: &Path, id: i64) -> Result<bool> {
     let kind = JobKind::parse(&kind)?;
     let mut progress = crate::progress::ProgressTracker::start(config_path, id, kind.as_str());
     match crate::job_runner::run_with_progress(config_path, kind, &mut progress) {
-        Ok(()) => {
+        Ok(changed) => {
             let transaction =
                 connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             let rerun_after: Option<String> = transaction
@@ -198,7 +198,13 @@ pub fn process(config_path: &Path, id: i64) -> Result<bool> {
                     params![kind.as_str(), run_after],
                 )?;
             }
-            enqueue_downstream(&transaction, kind, rerun)?;
+            enqueue_downstream(
+                &transaction,
+                kind,
+                rerun,
+                changed,
+                reason == "daemon startup",
+            )?;
             transaction.commit()?;
             progress.idle(format!("Completed {}", kind.as_str()));
         }
@@ -271,27 +277,41 @@ pub fn run(config_path: &Path, kind: JobKind) -> Result<()> {
     crate::job_runner::run(config_path, kind)
 }
 
-fn enqueue_downstream(connection: &Connection, kind: JobKind, rerun: bool) -> Result<()> {
+fn enqueue_downstream(
+    connection: &Connection,
+    kind: JobKind,
+    rerun: bool,
+    changed: bool,
+    daemon_startup: bool,
+) -> Result<()> {
     match kind {
         JobKind::Contacts => {
-            enqueue(
-                connection,
-                JobKind::GooglePublish,
-                "contacts reconciled",
-                Duration::zero(),
-            )?;
-            enqueue(
-                connection,
-                JobKind::Suggestions,
-                "contacts reconciled",
-                Duration::zero(),
-            )?;
-            enqueue(
-                connection,
-                JobKind::Gmail,
-                "contacts reconciled",
-                Duration::zero(),
-            )?;
+            if changed || daemon_startup {
+                enqueue(
+                    connection,
+                    JobKind::GooglePublish,
+                    if changed {
+                        "contact data changed"
+                    } else {
+                        "daemon startup"
+                    },
+                    Duration::zero(),
+                )?;
+            }
+            if changed {
+                enqueue(
+                    connection,
+                    JobKind::Suggestions,
+                    "contact data changed",
+                    Duration::zero(),
+                )?;
+                enqueue(
+                    connection,
+                    JobKind::Gmail,
+                    "contact data changed",
+                    Duration::zero(),
+                )?;
+            }
         }
         JobKind::Imessage | JobKind::Whatsapp | JobKind::AppleCalls | JobKind::WhatsappCalls => {
             enqueue(

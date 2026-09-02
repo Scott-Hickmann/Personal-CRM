@@ -95,6 +95,7 @@ pub(super) fn sync_apple(
         imported: imported.len(),
         deleted,
         schema_fingerprint: source.fingerprint.clone(),
+        changed: !imported.is_empty() || deleted > 0,
     })
 }
 
@@ -202,5 +203,6 @@ pub(super) fn sync_whatsapp(
         imported: imported.len(),
         deleted,
         schema_fingerprint: source.fingerprint.clone(),
+        changed: !imported.is_empty() || deleted > 0,
     })
 }

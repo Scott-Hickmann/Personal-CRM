@@ -34,6 +34,7 @@ pub struct SyncReport {
     pub imported: usize,
     pub deleted: usize,
     pub schema_fingerprint: String,
+    pub changed: bool,
 }
 
 pub fn run(

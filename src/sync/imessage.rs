@@ -109,5 +109,6 @@ pub fn sync(
         imported: imported.len(),
         deleted,
         schema_fingerprint: source.fingerprint.clone(),
+        changed: !imported.is_empty() || deleted > 0,
     })
 }

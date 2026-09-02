@@ -17,6 +17,35 @@ fn missing_change_token_requires_a_contact_refresh() {
 }
 
 #[test]
+fn content_fingerprint_ignores_contact_and_identity_order() {
+    let first = sample_contact("apple-1");
+    let mut second = sample_contact("apple-2");
+    second.emails.push(apple::LabeledValue {
+        label: Some("work".into()),
+        value: "work@example.com".into(),
+    });
+    let mut reordered = second.clone();
+    reordered.emails.reverse();
+
+    assert_eq!(
+        content_fingerprint(&[first.clone(), second]).unwrap(),
+        content_fingerprint(&[reordered, first]).unwrap()
+    );
+}
+
+#[test]
+fn content_fingerprint_detects_real_contact_changes() {
+    let original = sample_contact("apple-1");
+    let mut changed = original.clone();
+    changed.organization = "Example Inc".into();
+
+    assert_ne!(
+        content_fingerprint(&[original]).unwrap(),
+        content_fingerprint(&[changed]).unwrap()
+    );
+}
+
+#[test]
 fn retiring_contact_preserves_history_and_overlays() {
     let directory = tempfile::tempdir().unwrap();
     let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();

@@ -27,6 +27,10 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (11, include_str!("../migrations/011_gmail_people_sync.sql")),
     (12, include_str!("../migrations/012_hybrid_affinity.sql")),
     (13, include_str!("../migrations/013_concurrent_jobs.sql")),
+    (
+        14,
+        include_str!("../migrations/014_contact_content_fingerprint.sql"),
+    ),
 ];
 
 pub fn open(path: &Path) -> Result<Connection> {
@@ -97,7 +101,7 @@ mod tests {
         let path = directory.path().join("crm.sqlite3");
         drop(open(&path).unwrap());
         let connection = open(&path).unwrap();
-        assert_eq!(schema_version(&connection).unwrap(), 13);
+        assert_eq!(schema_version(&connection).unwrap(), 14);
     }
 
     #[test]
@@ -173,7 +177,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(schema_version(&connection).unwrap(), 13);
+        assert_eq!(schema_version(&connection).unwrap(), 14);
         assert_eq!(score, None);
         assert_eq!(state, "pending");
         assert_eq!(

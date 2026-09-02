@@ -129,7 +129,7 @@ fn continues_resumable_gmail_backfill_after_each_batch() {
         )
         .unwrap();
 
-    enqueue_downstream(&connection, JobKind::Gmail, false).unwrap();
+    enqueue_downstream(&connection, JobKind::Gmail, false, true, false).unwrap();
 
     let gmail_jobs: i64 = connection
         .query_row(
@@ -139,4 +139,47 @@ fn continues_resumable_gmail_backfill_after_each_batch() {
         )
         .unwrap();
     assert_eq!(gmail_jobs, 1);
+}
+
+#[test]
+fn unchanged_contacts_do_not_enqueue_downstream_work() {
+    let directory = tempfile::tempdir().unwrap();
+    let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
+
+    enqueue_downstream(&connection, JobKind::Contacts, false, false, false).unwrap();
+
+    let count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM jobs", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[test]
+fn changed_contacts_enqueue_all_contact_consumers() {
+    let directory = tempfile::tempdir().unwrap();
+    let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
+
+    enqueue_downstream(&connection, JobKind::Contacts, false, true, false).unwrap();
+
+    let kinds: Vec<String> = connection
+        .prepare("SELECT kind FROM jobs ORDER BY kind")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<std::result::Result<_, _>>()
+        .unwrap();
+    assert_eq!(kinds, ["gmail", "google_publish", "suggestions"]);
+}
+
+#[test]
+fn daemon_startup_enqueues_only_google_publish_for_unchanged_contacts() {
+    let directory = tempfile::tempdir().unwrap();
+    let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
+
+    enqueue_downstream(&connection, JobKind::Contacts, false, false, true).unwrap();
+
+    let kind: String = connection
+        .query_row("SELECT kind FROM jobs", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(kind, "google_publish");
 }

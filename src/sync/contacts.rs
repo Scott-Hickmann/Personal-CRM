@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use rusqlite::{Connection, OptionalExtension, params};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::{SyncReport, rebind_unresolved_participants};
@@ -63,6 +64,7 @@ pub fn sync(
             imported: 0,
             deleted: 0,
             schema_fingerprint: fingerprint,
+            changed: false,
         });
     }
     progress.stage(
@@ -73,7 +75,24 @@ pub fn sync(
         false,
         "query",
     );
-    let (contacts, companies) = partition_contacts(apple::contacts(configured, container)?);
+    let snapshot = apple::contacts(configured, container)?;
+    let content_fingerprint = content_fingerprint(&snapshot)?;
+    if source_matches_content_fingerprint(crm, &content_fingerprint)? {
+        crm.execute(
+            "UPDATE sources SET schema_fingerprint=?1, content_fingerprint=?2, cursor=?3,
+             status='ok', error=NULL, last_sync_at=CURRENT_TIMESTAMP WHERE id='contacts'",
+            params![fingerprint, content_fingerprint, change_token],
+        )?;
+        progress.finish_stage("iCloud contact data is unchanged", 1, 1, false, "query");
+        return Ok(SyncReport {
+            source: "contacts".into(),
+            imported: 0,
+            deleted: 0,
+            schema_fingerprint: fingerprint,
+            changed: false,
+        });
+    }
+    let (contacts, companies) = partition_contacts(snapshot);
     progress.finish_stage("Loaded the iCloud contact snapshot", 1, 1, false, "query");
     progress.stage(
         "Excluding iCloud company contacts",
@@ -133,13 +152,15 @@ pub fn sync(
     review::enqueue_unresolved_candidates(crm)?;
     progress.progress("Finalizing contact links", 3, 4, false, "steps");
     crm.execute(
-        "INSERT INTO sources(id, kind, account, schema_fingerprint, cursor, status, last_sync_at, last_reconcile_at)
-         VALUES ('contacts', 'contacts', ?1, ?2, ?3, 'ok', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        "INSERT INTO sources(id, kind, account, schema_fingerprint, content_fingerprint, cursor,
+                             status, last_sync_at, last_reconcile_at)
+         VALUES ('contacts', 'contacts', ?1, ?2, ?3, ?4, 'ok', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
          ON CONFLICT(id) DO UPDATE SET account=excluded.account,
-         schema_fingerprint=excluded.schema_fingerprint, cursor=excluded.cursor,
+         schema_fingerprint=excluded.schema_fingerprint,
+         content_fingerprint=excluded.content_fingerprint, cursor=excluded.cursor,
          status='ok', error=NULL,
          last_sync_at=CURRENT_TIMESTAMP, last_reconcile_at=CURRENT_TIMESTAMP",
-        params![container, fingerprint, change_token],
+        params![container, fingerprint, content_fingerprint, change_token],
     )?;
     progress.finish_stage("Finalized contact links", 4, 4, false, "steps");
     Ok(SyncReport {
@@ -147,7 +168,35 @@ pub fn sync(
         imported,
         deleted: 0,
         schema_fingerprint: fingerprint,
+        changed: true,
     })
+}
+
+fn content_fingerprint(contacts: &[AppleContact]) -> Result<String> {
+    let mut contacts = contacts.to_vec();
+    contacts.sort_by(|left, right| left.id.cmp(&right.id));
+    for contact in &mut contacts {
+        contact
+            .emails
+            .sort_by(|left, right| (&left.value, &left.label).cmp(&(&right.value, &right.label)));
+        contact
+            .phones
+            .sort_by(|left, right| (&left.value, &left.label).cmp(&(&right.value, &right.label)));
+    }
+    let encoded = serde_json::to_vec(&contacts)
+        .map_err(|error| CrmError::Serialization(error.to_string()))?;
+    Ok(format!("{:x}", Sha256::digest(encoded)))
+}
+
+fn source_matches_content_fingerprint(crm: &Connection, fingerprint: &str) -> Result<bool> {
+    Ok(crm
+        .query_row(
+            "SELECT content_fingerprint=?2 FROM sources WHERE id=?1",
+            params!["contacts", fingerprint],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or(false))
 }
 
 fn source_matches_change_token(
