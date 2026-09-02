@@ -22,16 +22,80 @@ fn interaction(connection: &Connection, id: &str, channel: &str, identity: &str,
         .unwrap();
 }
 
+fn gmail_interaction(
+    connection: &Connection,
+    id: &str,
+    identity: &str,
+    direction: &str,
+    eligible: bool,
+) {
+    connection
+        .execute(
+            "INSERT INTO interactions(
+                 id, source_id, native_id, channel, kind, occurred_at, direction,
+                 metadata_json, last_seen_at
+             ) VALUES (?1, 'gmail', ?1, 'gmail', 'email',
+                       '2026-01-01T00:00:00Z', ?2, ?3, '2026-01-01T00:00:00Z')",
+            params![
+                id,
+                direction,
+                serde_json::json!({"candidate_eligible": eligible}).to_string()
+            ],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO interaction_participants(
+                 interaction_id, identity_value, display_name, role
+             ) VALUES (?1, ?2, 'Alex', 'recipient')",
+            params![id, identity],
+        )
+        .unwrap();
+}
+
 fn database() -> (tempfile::TempDir, Connection) {
     let directory = tempfile::tempdir().unwrap();
     let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
     connection
         .execute(
-            "INSERT INTO sources(id, kind) VALUES ('whatsapp', 'whatsapp')",
+            "INSERT INTO sources(id, kind) VALUES ('whatsapp', 'whatsapp'), ('gmail', 'gmail')",
             [],
         )
         .unwrap();
     (directory, connection)
+}
+
+#[test]
+fn gmail_candidates_require_direct_outgoing_human_evidence() {
+    let (_directory, connection) = database();
+    gmail_interaction(&connection, "direct", "alex@example.com", "outgoing", true);
+    gmail_interaction(
+        &connection,
+        "incoming",
+        "stranger@example.com",
+        "incoming",
+        true,
+    );
+    gmail_interaction(
+        &connection,
+        "bulk",
+        "another@example.com",
+        "outgoing",
+        false,
+    );
+    gmail_interaction(
+        &connection,
+        "shared",
+        "support@example.com",
+        "outgoing",
+        true,
+    );
+
+    assert_eq!(review_candidates::enqueue(&connection).unwrap(), 1);
+    let items = review::pending(&connection).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].subject_key, "alex@example.com");
+    assert_eq!(items[0].source.as_deref(), Some("Gmail"));
 }
 
 #[test]

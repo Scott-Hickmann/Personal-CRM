@@ -48,7 +48,9 @@ crm auth gmail list
 crm auth gmail remove account@example.com
 ```
 
-Refresh tokens are stored in macOS Keychain, not the configuration file. Gmail access uses the read-only scope and GET requests only. Sync excludes Spam and Trash. Deterministic bulk/automated email is reduced to metadata; local analysis can remove retained bodies it classifies as non-personal. All configured self email addresses are treated equally, including work and personal addresses.
+Refresh tokens are stored in macOS Keychain, not the configuration file. Gmail access uses the read-only scope and GET requests only. Gmail is treated as relationship evidence rather than a mailbox archive: historical searches cover messages involving active iCloud-contact email addresses, while contact discovery considers only direct outgoing mail from the last two years. Discovery messages are checked as header metadata first, and bodies are retrieved only after the message qualifies. Spam, Trash, Drafts, Promotions, Social, Forums, mailing lists, automated senders, and bulk mail are excluded before storage or analysis. Unknown incoming-only senders are ignored. All configured self email addresses are treated equally, including work and personal addresses.
+
+The initial people-focused backfill is checkpointed by contact search and processes at most 50 message payloads per account in each daemon job. Completed searches and messages survive sleep, network loss, and daemon restarts. The daemon interleaves additional Gmail batches with review and bounded local analysis; subsequent mailbox updates use Gmail history rather than repeating the backfill.
 
 ## Configure authoritative contacts and Google mirrors
 
@@ -102,7 +104,7 @@ crm review
 crm stop
 ```
 
-`crm status --live` shows the active job, its current stage, and exact `x/n` progress for contacts, messages, interactions, people, actions, and candidates. Gmail full-sync totals are API estimates and are marked with `~`; all other displayed totals are exact.
+`crm status --live` shows the active job, its current stage, and exact `x/n` progress for contacts, contact searches, messages, interactions, people, actions, and candidates. During Gmail backfill it reports completed contact searches, the queued message count, and kept-versus-excluded totals for the current batch.
 
 ## Local web companion
 
@@ -143,7 +145,7 @@ crm fact set --person "Alex" --key "birthday" --value "May 4"
 crm tag add --person "Alex" --tag "climbing"
 ```
 
-People cannot be created directly in CRM. Unmanaged Google Contacts and unresolved WhatsApp or Gmail identities become contact candidates in `crm review`; each suggestion shows its source, and approval creates the iCloud contact first. SMS, RCS, iMessage, Apple Calls, WhatsApp groups, and identities already present on an active iCloud contact are excluded. Notes, facts, and tags support `--dry-run`. Partial names are accepted only when they resolve to exactly one active or retired person. `person delete` is restricted to retired, non-self people and preserves shared source interactions as unassigned.
+People cannot be created directly in CRM. Unmanaged Google Contacts, unresolved WhatsApp people, and person-like recipients of direct outgoing Gmail become contact candidates in `crm review`; each suggestion shows its source, and approval creates the iCloud contact first. Incoming-only Gmail identities, shared mailboxes, SMS, RCS, iMessage, Apple Calls, WhatsApp groups, and identities already present on an active iCloud contact are excluded. Notes, facts, and tags support `--dry-run`. Partial names are accepted only when they resolve to exactly one active or retired person. `person delete` is restricted to retired, non-self people and preserves shared source interactions as unassigned.
 
 ## Match a face from Photos
 

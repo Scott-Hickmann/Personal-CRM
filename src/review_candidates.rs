@@ -38,7 +38,14 @@ pub(crate) fn enqueue_with_progress(
          FROM interaction_participants ip JOIN interactions i ON i.id=ip.interaction_id
          WHERE ip.person_id IS NULL AND ip.identity_value IS NOT NULL
            AND trim(ip.identity_value) != '' AND i.deleted_at IS NULL
-           AND lower(i.channel) IN ('whatsapp', 'whatsapp_call', 'gmail')
+           AND (
+             lower(i.channel) IN ('whatsapp', 'whatsapp_call')
+             OR (
+               lower(i.channel)='gmail' AND lower(COALESCE(i.direction, ''))='outgoing'
+               AND ip.role='recipient'
+               AND json_extract(i.metadata_json, '$.candidate_eligible')=1
+             )
+           )
          GROUP BY lower(trim(ip.identity_value)) ORDER BY COUNT(*) DESC",
     )?;
     let rows: Vec<(String, i64, String, Option<String>)> = statement
@@ -90,6 +97,21 @@ pub(crate) fn enqueue_with_progress(
             .filter(|channel| !channel.is_empty())
             .map(str::to_owned)
             .collect::<BTreeSet<_>>();
+        if identity.contains('@')
+            && channel_set
+                .iter()
+                .all(|channel| channel.eq_ignore_ascii_case("gmail"))
+            && !crate::sync::gmail_message::is_probable_person_email(&identity)
+        {
+            progress.progress(
+                "Grouping unresolved identities",
+                (index + 1) as u64,
+                row_count,
+                false,
+                "identities",
+            );
+            continue;
+        }
         let entry = grouped
             .entry(normalized.clone())
             .or_insert_with(|| Candidate {
