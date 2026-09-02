@@ -63,6 +63,8 @@ pub fn stop(format: Format, config_path: PathBuf) -> Result<()> {
         return Err(CrmError::InvalidConfig("CRM daemon is not running".into()));
     }
     let connection = commands::open_database(&config_path)?;
+    let recovered = jobs::recover_running(&connection)?;
+    crate::progress::record_interrupted(&config_path, recovered);
     connection.execute(
         "UPDATE daemon_state SET pid=NULL, stopped_at=CURRENT_TIMESTAMP WHERE id=1",
         [],

@@ -28,7 +28,8 @@ pub fn run(config_path: PathBuf) -> Result<()> {
          heartbeat_at=CURRENT_TIMESTAMP, stopped_at=NULL, last_error=NULL",
         [std::process::id()],
     )?;
-    jobs::recover_running(&connection)?;
+    let recovered = jobs::recover_running(&connection)?;
+    crate::progress::record_interrupted(&config_path, recovered);
     enqueue_initial(&connection)?;
     let mut watcher = SourceWatcher::new(&config)?;
     let mut gmail_due = Instant::now();
