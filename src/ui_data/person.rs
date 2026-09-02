@@ -220,4 +220,30 @@ mod tests {
 
         assert_eq!(body.body.as_deref(), Some("private body"));
     }
+
+    #[test]
+    fn person_detail_includes_followups_written_through_repository() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state)
+             VALUES ('person', 'Alex', 'apple-alex', 'active')",
+                [],
+            )
+            .unwrap();
+        repository::add_followup(
+            &connection,
+            "person",
+            "Check in",
+            Some("2026-09-10T10:00"),
+            false,
+        )
+        .unwrap();
+
+        let detail = load(&connection, "person", 10).unwrap();
+
+        assert_eq!(detail.followups.len(), 1);
+        assert_eq!(detail.followups[0].body, "Check in");
+    }
 }

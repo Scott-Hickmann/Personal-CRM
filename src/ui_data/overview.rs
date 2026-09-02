@@ -62,14 +62,26 @@ mod tests {
              VALUES ('person', 'Alex', 'apple-alex', 'active');
              INSERT INTO identities(id, person_id, kind, value, normalized_value, active)
              VALUES ('identity', 'person', 'email', 'alex@example.com', 'alex@example.com', 1);
-             INSERT INTO tags(person_id, tag) VALUES ('person', 'friend');",
+             INSERT INTO tags(person_id, tag) VALUES ('person', 'friend');
+             INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state)
+             VALUES ('other', 'Blair', 'apple-blair', 'active');
+             INSERT INTO relationships(
+                 id, source_person_id, target_person_id, relationship_type, confidence
+             ) VALUES ('relationship', 'person', 'other', 'friend', 0.9);",
             )
             .unwrap();
 
         let overview = load(&connection).unwrap();
 
-        assert_eq!(overview.people.len(), 1);
-        assert_eq!(overview.people[0].tags, ["friend"]);
-        assert_eq!(overview.people[0].identities, ["alex@example.com"]);
+        assert_eq!(overview.people.len(), 2);
+        let alex = overview
+            .people
+            .iter()
+            .find(|person| person.id == "person")
+            .unwrap();
+        assert_eq!(alex.tags, ["friend"]);
+        assert_eq!(alex.identities, ["alex@example.com"]);
+        assert_eq!(overview.graph.nodes.len(), 2);
+        assert_eq!(overview.graph.edges.len(), 1);
     }
 }
