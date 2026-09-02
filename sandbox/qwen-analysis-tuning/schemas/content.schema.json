@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["interaction_id", "summary", "is_personal", "mentions"],
+  "properties": {
+    "interaction_id": {"type": "string"},
+    "summary": {"type": "string"},
+    "is_personal": {"type": "boolean"},
+    "mentions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "confidence", "relationship_type"],
+        "properties": {
+          "name": {"type": "string"},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+          "relationship_type": {"type": "string"}
+        }
+      }
+    }
+  }
+}
