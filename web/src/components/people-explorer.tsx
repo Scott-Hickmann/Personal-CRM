@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowUpRight, MessageSquareText, Search, UserRoundCheck } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpRight, MessageSquareText, Search, UserRoundCheck } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,24 +12,31 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { formatDate, initials, titleCase } from "@/lib/format";
 import type { OverviewPerson } from "@/lib/types";
 
+type SortKey = "affinity" | "interactions" | "recent" | "name";
+type SortDirection = "asc" | "desc";
+
 export function PeopleExplorer({ people, relationshipCount }: { people: OverviewPerson[]; relationshipCount: number }) {
   const [query, setQuery] = useState("");
   const [tier, setTier] = useState("all");
   const [activity, setActivity] = useState("all");
   const [lifecycle, setLifecycle] = useState("active");
+  const [sortBy, setSortBy] = useState<SortKey>("affinity");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [shown, setShown] = useState(60);
 
   const visible = useMemo(() => {
     const term = query.trim().toLocaleLowerCase();
-    return people.filter((person) => {
-      const searchable = [person.display_name, ...person.identities, ...person.tags].join(" ").toLocaleLowerCase();
-      return (!term || searchable.includes(term))
-        && (tier === "all" || person.affinity_tier === tier)
-        && (activity === "all" || person.activity_state === activity)
-        && (lifecycle === "all" || person.lifecycle_state === lifecycle)
-        && !person.is_self;
-    });
-  }, [activity, lifecycle, people, query, tier]);
+    return people
+      .filter((person) => {
+        const searchable = [person.display_name, ...person.identities, ...person.tags].join(" ").toLocaleLowerCase();
+        return (!term || searchable.includes(term))
+          && (tier === "all" || person.affinity_tier === tier)
+          && (activity === "all" || person.activity_state === activity)
+          && (lifecycle === "all" || person.lifecycle_state === lifecycle)
+          && !person.is_self;
+      })
+      .sort((left, right) => comparePeople(left, right, sortBy, sortDirection));
+  }, [activity, lifecycle, people, query, sortBy, sortDirection, tier]);
 
   const activePeople = people.filter((person) => person.lifecycle_state === "active" && !person.is_self).length;
   const warmPeople = people.filter((person) => ["core", "close"].includes(person.affinity_tier ?? "")).length;
@@ -43,7 +50,7 @@ export function PeopleExplorer({ people, relationshipCount }: { people: Overview
       </section>
 
       <Card>
-        <CardContent className="grid gap-3 p-4 lg:grid-cols-[minmax(16rem,1fr)_11rem_11rem_11rem]">
+        <CardContent className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-[minmax(16rem,1fr)_10rem_10rem_10rem_11rem_auto]">
           <label className="relative">
             <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2" />
             <Input
@@ -57,6 +64,25 @@ export function PeopleExplorer({ people, relationshipCount }: { people: Overview
           <Filter value={tier} onChange={setTier} label="All tiers" options={["core", "close", "familiar", "acquaintance", "peripheral"]} />
           <Filter value={activity} onChange={setActivity} label="All activity" options={["active", "cooling", "dormant", "never"]} />
           <Filter value={lifecycle} onChange={setLifecycle} label="All records" options={["active", "retired"]} />
+          <Select value={sortBy} onValueChange={(value) => setSortBy(value as SortKey)}>
+            <SelectTrigger className="w-full" aria-label="Sort people by"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="affinity">Affinity</SelectItem>
+              <SelectItem value="interactions">Interactions</SelectItem>
+              <SelectItem value="recent">Last contact</SelectItem>
+              <SelectItem value="name">Name</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setSortDirection((value) => value === "desc" ? "asc" : "desc")}
+            aria-label={`Sort ${sortDirection === "desc" ? "ascending" : "descending"}`}
+            className="w-full xl:w-auto"
+          >
+            {sortDirection === "desc" ? <ArrowDown /> : <ArrowUp />}
+            {sortDirection === "desc" ? "Descending" : "Ascending"}
+          </Button>
         </CardContent>
       </Card>
 
@@ -119,4 +145,46 @@ function Metric({ icon: Icon, label, value }: { icon: typeof UserRoundCheck; lab
 
 function Filter({ value, onChange, label, options }: { value: string; onChange: (value: string) => void; label: string; options: string[] }) {
   return <Select value={value} onValueChange={onChange}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">{label}</SelectItem>{options.map((option) => <SelectItem key={option} value={option}>{titleCase(option)}</SelectItem>)}</SelectContent></Select>;
+}
+
+function comparePeople(left: OverviewPerson, right: OverviewPerson, sortBy: SortKey, direction: SortDirection) {
+  let comparison = 0;
+
+  if (sortBy === "affinity") {
+    comparison = compareNullable(left.affinity_score, right.affinity_score, direction);
+  } else if (sortBy === "interactions") {
+    comparison = compareNumbers(left.interaction_count, right.interaction_count, direction);
+  } else if (sortBy === "recent") {
+    comparison = compareNullable(
+      timestamp(left.last_interaction_at),
+      timestamp(right.last_interaction_at),
+      direction,
+    );
+  } else {
+    comparison = compareNames(left.display_name, right.display_name, direction);
+  }
+
+  return comparison || compareNames(left.display_name, right.display_name, "asc");
+}
+
+function compareNullable(left: number | null, right: number | null, direction: SortDirection) {
+  if (left === null && right === null) return 0;
+  if (left === null) return 1;
+  if (right === null) return -1;
+  return compareNumbers(left, right, direction);
+}
+
+function compareNumbers(left: number, right: number, direction: SortDirection) {
+  return direction === "asc" ? left - right : right - left;
+}
+
+function compareNames(left: string, right: string, direction: SortDirection) {
+  const comparison = left.localeCompare(right, undefined, { sensitivity: "base", numeric: true });
+  return direction === "asc" ? comparison : -comparison;
+}
+
+function timestamp(value: string | null) {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
 }
