@@ -164,7 +164,7 @@ crm run google-publish
 crm run suggestions
 ```
 
-Analysis snapshots every eligible pending interaction, then sends them one at a time to the configured local Ollama server. Each result is persisted before the next interaction begins, so interrupted work resumes from the remaining records. Interactions imported during a running analysis cause an immediate follow-up pass; scoring waits until that follow-up work is drained. The editable prompt and response schema are in [`prompts/`](prompts/). There is intentionally no remote or alternate-model fallback: analysis fails when Ollama or a configured model is unavailable.
+Analysis snapshots every eligible pending interaction, then processes interactions one at a time with the configured local Ollama server. One short call extracts content metadata; up to three concurrent calls score one supplied participant each. Every call uses an exact JSON schema and gets one schema-error repair attempt before the job fails. The complete interaction is persisted atomically before analysis moves on, so interrupted work resumes from the remaining records. Interactions imported during a running analysis cause an immediate follow-up pass; scoring waits until that follow-up work is drained. The editable prompts and response schemas are in [`prompts/`](prompts/). There is intentionally no remote or alternate-model fallback: analysis fails when Ollama or a configured model is unavailable.
 
 ## People and manual information
 
