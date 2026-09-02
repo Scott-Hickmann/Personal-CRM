@@ -36,7 +36,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             aria-label="Toggle color theme"
             onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
           >
-            {resolvedTheme === "dark" ? <Sun /> : <Moon />}
+            <Sun className="hidden dark:block" />
+            <Moon className="dark:hidden" />
           </Button>
         </div>
 
