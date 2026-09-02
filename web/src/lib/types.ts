@@ -46,14 +46,35 @@ export type Score = {
   affinity_tier: string;
   activity_state: string;
   behavioral_score: number;
-  semantic_score: number;
+  relational_score: number;
+  closeness_rating: number | null;
+  calibration: {
+    rating_count: number;
+    intercept: number;
+    scale: number;
+  };
   components: {
+    interactions_30d: number;
     interactions_90d: number;
-    active_days_90d: number;
+    interactions_365d: number;
+    active_weeks_90d: number;
     channels_90d: number;
     incoming_90d: number;
     outgoing_90d: number;
     days_since_last: number | null;
+    relationship_span_days: number;
+    base_score: number;
+    relational: {
+      assessed_interactions: number;
+      meaningful_interactions: number;
+      intimacy: number;
+      emotional_support: number;
+      practical_support: number;
+      affection: number;
+      shared_activity: number;
+      conflict_repair: number;
+      evidence: { occurred_at: string; summary: string }[];
+    };
   };
 };
 

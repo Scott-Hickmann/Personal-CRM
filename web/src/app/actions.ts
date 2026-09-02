@@ -48,3 +48,19 @@ export async function addFollowupAction(_: ActionState, formData: FormData): Pro
   if (due) args.push("--due", due);
   return mutate(args, person, "Follow-up added.");
 }
+
+export async function setAffinityAction(_: ActionState, formData: FormData): Promise<ActionState> {
+  const person = empty(formData.get("person"));
+  const rating = empty(formData.get("rating"));
+  const value = Number(rating);
+  if (!person || !Number.isInteger(value) || value < 1 || value > 7) {
+    return { status: "error", message: "Choose a closeness rating from 1 to 7." };
+  }
+  return mutate(["affinity", "rate", "--person", person, "--rating", rating], person, `Closeness rated ${rating}/7.`);
+}
+
+export async function clearAffinityAction(_: ActionState, formData: FormData): Promise<ActionState> {
+  const person = empty(formData.get("person"));
+  if (!person) return { status: "error", message: "A person is required." };
+  return mutate(["affinity", "clear", "--person", person], person, "Closeness rating cleared.");
+}

@@ -1,6 +1,6 @@
 # Personal CRM
 
-`crm` is a private, macOS-only personal CRM with a launchd-managed background daemon. One selected iCloud Contacts container is the identity source of truth: every active CRM person maps to exactly one iCloud contact, while communication sources contribute interactions and suggestions without creating people. Local Ollama models summarize interactions and infer relationship context.
+`crm` is a private, macOS-only personal CRM with a launchd-managed background daemon. One selected iCloud Contacts container is the identity source of truth: every active CRM person maps to exactly one iCloud contact, while communication sources contribute interactions and suggestions without creating people. Local Ollama models summarize interactions and extract evidence about intimacy, support, affection, shared activity, and conflict repair.
 
 ## Requirements
 
@@ -115,7 +115,7 @@ crm ui
 crm ui --port 3100
 ```
 
-The CLI starts `pnpm dev` in [`web/`](web/), binds it to the loopback interface only, and passes its own executable and active config path to the server. The app never opens the CRM database directly: contact search, detail views, interaction reveals, relationship graphs, notes, facts, tags, and follow-ups all execute through Rust CLI JSON commands. Message bodies appear as previews until explicitly revealed. The relationship page renders the complete inferred network in Cytoscape and supports person, type, confidence, affinity-tier, activity, and layout filters.
+The CLI starts `pnpm dev` in [`web/`](web/), binds it to the loopback interface only, and passes its own executable and active config path to the server. The app never opens the CRM database directly: contact search, detail views, interaction reveals, relationship graphs, notes, facts, tags, follow-ups, and closeness ratings all execute through Rust CLI JSON commands. Message bodies appear as previews until explicitly revealed. The relationship page renders the complete inferred network in Cytoscape and supports person, type, confidence, affinity-tier, activity, and layout filters.
 
 The daemon watches the selected iCloud Contacts database, iMessage, WhatsApp, and call-history databases with a short debounce. It polls Gmail history every minute and reconciles Photos periodically. New interactions trigger bounded, debounced Ollama analysis followed by deterministic scoring. Jobs are coalesced in SQLite, survive restarts, and retry failures.
 
@@ -206,6 +206,8 @@ crm query people --include-retired \
   --filter 'lifecycle_state = retired'
 
 crm explain "Alex"
+crm affinity rate --person "Alex" --rating 6
+crm affinity clear --person "Alex"
 crm graph "Alex" --min-confidence 0.7
 ```
 
@@ -215,14 +217,16 @@ People queries include active people by default; `--include-retired` makes retir
 
 ## Closeness model
 
-Closeness is explainable rather than purely model-generated:
+Closeness uses a local hybrid model:
 
-- Behavioral score: 90-day volume (40%), active-day consistency (25%), channel diversity (10%), incoming/outgoing balance (15%), and recency (10%).
-- Final affinity: 70% behavioral score and 30% mean confidence of inferred relationship evidence.
+- Behavioral evidence combines log-scaled 90-day volume (25%), 365-day volume (10%), active-week consistency (20%), channel diversity (5%), incoming/outgoing balance (15%), recency with a 60-day half-life (15%), and relationship duration (10%).
+- Ollama emits separate 0–3 observations for intimacy, emotional support, practical support, affection, shared activity, and conflict repair. Each observation retains a factual summary and its source interaction. Extraction confidence weights reliability; it never contributes relationship strength directly.
+- Relational evidence uses a 365-day half-life and combines signal quality, repeated evidence, and breadth across the six dimensions. Its affinity weight grows with analyzed coverage up to 35%; before Ollama evidence is available, the behavioral score remains the prior.
+- Optional 1–7 user ratings directly anchor rated people to the matching tier. Once five ratings exist, they also fit a regularized monotonic calibration for unrated people; below that threshold the uncalibrated prior remains in place. Ratings can be managed in the person page or with `crm affinity rate` and `crm affinity clear`.
 - Tiers: `core` (80+), `close` (60+), `familiar` (40+), `acquaintance` (20+), and `peripheral` (below 20).
 - Activity: `active` through 30 days, `cooling` through 90 days, `dormant` after 90 days, or `never`.
 
-Use `crm explain PERSON` to see the components for one person. Inferred relationship types use the single-word fallback `unclear` when evidence is weak or unknown.
+Use `crm explain PERSON` or the person page to inspect behavior, model dimensions, evidence coverage, calibration, and the resulting score. Inferred relationship types use the single-word fallback `unclear` when evidence is weak or unknown. After upgrading from the earlier heuristic, retained interaction bodies are queued once for re-analysis so the new relational signals can be populated locally.
 
 ## Source safety
 

@@ -49,7 +49,7 @@ export function ContactOverview({ detail }: { detail: PersonDetail }) {
       <div className="space-y-4">
         <Card>
           <CardHeader><CardTitle>Add CRM context</CardTitle></CardHeader>
-          <CardContent><MutationForms personId={person.id} /></CardContent>
+          <CardContent><MutationForms personId={person.id} closenessRating={detail.score.closeness_rating} /></CardContent>
         </Card>
         <Card>
           <CardHeader><CardTitle>Cadence & Photos</CardTitle></CardHeader>
