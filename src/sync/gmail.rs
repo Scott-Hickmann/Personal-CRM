@@ -40,7 +40,13 @@ pub fn sync(
             false,
             "connection",
         );
-        let report = sync_account(config, crm, &credentials, account, progress, stage)?;
+        let report = match sync_account(config, crm, &credentials, account, progress, stage) {
+            Ok(report) => report,
+            Err(error) => {
+                mark_failed(crm, account, &error.to_string());
+                return Err(error);
+            }
+        };
         progress.event(format!(
             "Finished {account}: {} people-focused emails kept, {} excluded, {} deleted",
             report.imported, report.excluded, report.deleted
@@ -53,6 +59,24 @@ pub fn sync(
         });
     }
     Ok(reports)
+}
+
+fn mark_failed(crm: &Connection, account: &str, error: &str) {
+    let source_id = format!("gmail:{account}");
+    let Ok(transaction) = crate::db::immediate_transaction(crm) else {
+        return;
+    };
+    if transaction
+        .execute(
+            "INSERT INTO sources(id, kind, account, schema_fingerprint, status, error)
+             VALUES (?1, 'gmail', ?2, 'gmail-api-v1-people-focused', 'failed', ?3)
+             ON CONFLICT(id) DO UPDATE SET status='failed', error=excluded.error",
+            params![source_id, account, error],
+        )
+        .is_ok()
+    {
+        let _ = transaction.commit();
+    }
 }
 
 fn sync_account(
@@ -198,7 +222,7 @@ fn sync_history(
             break current_cursor;
         }
     };
-    let transaction = crm.unchecked_transaction()?;
+    let transaction = crate::db::immediate_transaction(crm)?;
     for id in &deleted {
         gmail_store::discard_message(&transaction, source.id, id)?;
         gmail_backfill::mark(
@@ -248,6 +272,43 @@ fn set_current_cursor(crm: &Connection, client: &ApiClient, source_id: &str) -> 
         params![source_id, profile.history_id],
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failure_is_recorded_only_for_the_current_account() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = crate::db::open(&directory.path().join("crm.sqlite3")).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO sources(id, kind, account, status) VALUES
+                 ('gmail:first@example.com', 'gmail', 'first@example.com', 'ok'),
+                 ('gmail:second@example.com', 'gmail', 'second@example.com', 'ok');",
+            )
+            .unwrap();
+
+        mark_failed(&connection, "first@example.com", "database is locked");
+
+        let first: (String, Option<String>) = connection
+            .query_row(
+                "SELECT status, error FROM sources WHERE id='gmail:first@example.com'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let second: (String, Option<String>) = connection
+            .query_row(
+                "SELECT status, error FROM sources WHERE id='gmail:second@example.com'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(first, ("failed".into(), Some("database is locked".into())));
+        assert_eq!(second, ("ok".into(), None));
+    }
 }
 
 #[derive(Debug, Default)]

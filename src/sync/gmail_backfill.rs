@@ -156,7 +156,7 @@ pub(super) fn scan(
             }
         };
         let found = page.messages.len();
-        let transaction = crm.unchecked_transaction()?;
+        let transaction = crate::db::immediate_transaction(crm)?;
         for message in page.messages {
             enqueue_from_scope(&transaction, source_id, &message.id, &kind)?;
         }
@@ -288,7 +288,7 @@ pub(super) fn queued(crm: &Connection, source_id: &str) -> Result<(Vec<QueuedMes
 }
 
 pub(super) fn reset(crm: &Connection, source_id: &str) -> Result<()> {
-    let transaction = crm.unchecked_transaction()?;
+    let transaction = crate::db::immediate_transaction(crm)?;
     transaction.execute(
         "UPDATE gmail_sync_scopes SET page_token=NULL, messages_found=0,
          completed_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE source_id=?1",

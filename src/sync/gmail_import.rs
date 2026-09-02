@@ -76,7 +76,7 @@ pub(super) fn process_queue(
             context.self_addresses,
             context.known_emails,
         )?;
-        let transaction = crm.unchecked_transaction()?;
+        let transaction = crate::db::immediate_transaction(crm)?;
         match prepared {
             PreparedMessage::Deleted => {
                 if gmail_store::discard_message(&transaction, context.source_id, &queued.id)? {

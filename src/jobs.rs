@@ -255,7 +255,7 @@ fn record_source_failure(connection: &Connection, kind: JobKind, error: &str) ->
         JobKind::Whatsapp => Some(("id", "whatsapp")),
         JobKind::AppleCalls => Some(("id", "apple_calls")),
         JobKind::WhatsappCalls => Some(("id", "whatsapp_calls")),
-        JobKind::Gmail => Some(("kind", "gmail")),
+        JobKind::Gmail => None,
         _ => None,
     };
     if let Some((column, value)) = source {

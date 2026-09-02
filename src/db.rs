@@ -3,7 +3,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::time::Duration;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, Transaction, TransactionBehavior};
 
 use crate::error::{CrmError, Result};
 
@@ -81,9 +81,15 @@ pub fn schema_version(connection: &Connection) -> Result<i64> {
         .map_err(Into::into)
 }
 
+pub fn immediate_transaction(connection: &Connection) -> Result<Transaction<'_>> {
+    Transaction::new_unchecked(connection, TransactionBehavior::Immediate).map_err(Into::into)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
+    use std::thread;
 
     #[test]
     fn migration_is_idempotent() {
@@ -92,6 +98,44 @@ mod tests {
         drop(open(&path).unwrap());
         let connection = open(&path).unwrap();
         assert_eq!(schema_version(&connection).unwrap(), 13);
+    }
+
+    #[test]
+    fn immediate_transaction_waits_for_an_active_writer() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("crm.sqlite3");
+        let connection = open(&path).unwrap();
+        let active = immediate_transaction(&connection).unwrap();
+        active
+            .execute(
+                "INSERT INTO sources(id, kind) VALUES ('active', 'test')",
+                [],
+            )
+            .unwrap();
+
+        let (started_tx, started_rx) = mpsc::channel();
+        let worker_path = path.clone();
+        let worker = thread::spawn(move || {
+            let waiting = open(&worker_path).unwrap();
+            started_tx.send(()).unwrap();
+            let transaction = immediate_transaction(&waiting).unwrap();
+            transaction
+                .execute(
+                    "INSERT INTO sources(id, kind) VALUES ('waiting', 'test')",
+                    [],
+                )
+                .unwrap();
+            transaction.commit().unwrap();
+        });
+        started_rx.recv().unwrap();
+        thread::sleep(Duration::from_millis(100));
+        active.commit().unwrap();
+        worker.join().unwrap();
+
+        let count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM sources", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
     }
 
     #[test]
