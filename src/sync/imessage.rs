@@ -1,7 +1,8 @@
 use rusqlite::Connection;
 use std::collections::HashSet;
 
-use super::{SyncReport, add_participant, finish_source, open_source, upsert_interaction};
+use super::incremental::{finish_incremental_source, incremental_floor, open_incremental_source};
+use super::{SyncReport, add_participant, upsert_interaction};
 use crate::error::{CrmError, Result};
 use crate::progress::ProgressTracker;
 
@@ -17,7 +18,7 @@ pub fn sync(
         .imessage
         .as_ref()
         .ok_or_else(|| CrmError::InvalidConfig("iMessage path is not configured".into()))?;
-    let (source, fingerprint, run_at) = open_source(
+    let source = open_incremental_source(
         crm,
         "imessage",
         "imessage",
@@ -29,7 +30,7 @@ pub fn sync(
         "SELECT m.guid, COALESCE(c.guid, c.chat_identifier), COALESCE(m.service, 'iMessage'),
                 datetime((m.date / 1000000000) + 978307200, 'unixepoch'), m.is_from_me,
                 m.subject, m.text, h.id, m.cache_has_attachments,
-                CASE WHEN participants.handle_count = 1 THEN NULLIF(c.display_name, '') END,
+                CASE WHEN participants.handle_count = 1 THEN NULLIF(c.display_name, '') END, m.ROWID,
                 COUNT(*) OVER()
          FROM message m
          LEFT JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
@@ -38,12 +39,13 @@ pub fn sync(
          LEFT JOIN (
              SELECT chat_id, COUNT(*) AS handle_count FROM chat_handle_join GROUP BY chat_id
          ) participants ON participants.chat_id = c.ROWID
-         WHERE m.guid IS NOT NULL AND m.date IS NOT NULL AND m.is_system_message = 0",
+         WHERE m.guid IS NOT NULL AND m.date IS NOT NULL AND m.is_system_message = 0
+           AND m.ROWID > ?1",
     )?;
     let mut imported = HashSet::new();
-    let mut rows = statement.query([])?;
     let mut processed = 0_u64;
     let mut total = 0_u64;
+    let mut cursor = if source.audit { 0 } else { source.cursor };
     progress.stage(
         "Reading iMessage conversations",
         stage_current,
@@ -52,8 +54,10 @@ pub fn sync(
         false,
         "query",
     );
+    let mut rows = statement.query([incremental_floor(&source)])?;
     while let Some(row) = rows.next()? {
-        total = u64::try_from(row.get::<_, i64>(10)?).unwrap_or_default();
+        total = u64::try_from(row.get::<_, i64>(11)?).unwrap_or_default();
+        cursor = cursor.max(row.get(10)?);
         let native_id: String = row.get(0)?;
         imported.insert(native_id.clone());
         let from_me = row.get::<_, i64>(4)? != 0;
@@ -70,7 +74,7 @@ pub fn sync(
             row.get::<_, Option<String>>(5)?.as_deref(),
             row.get::<_, Option<String>>(6)?.as_deref(),
             &serde_json::json!({"has_attachments": row.get::<_, i64>(8)? != 0}),
-            &run_at,
+            &source.run_at,
         )?;
         if let Some(identity) = identity {
             add_participant(
@@ -98,12 +102,12 @@ pub fn sync(
         "messages",
     );
     progress.progress_now("Finalizing iMessage sync", 0, 1, false, "step");
-    let deleted = finish_source(crm, "imessage", &run_at)?;
+    let deleted = finish_incremental_source(crm, "imessage", &source, cursor)?;
     progress.finish_stage("Finalized iMessage sync", 1, 1, false, "step");
     Ok(SyncReport {
         source: "imessage".into(),
         imported: imported.len(),
         deleted,
-        schema_fingerprint: fingerprint,
+        schema_fingerprint: source.fingerprint.clone(),
     })
 }

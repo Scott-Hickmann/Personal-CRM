@@ -6,27 +6,25 @@ mod gmail_import;
 pub(crate) mod gmail_message;
 mod gmail_store;
 mod imessage;
+mod incremental;
 mod whatsapp;
 mod whatsapp_identity;
 
-use std::path::Path;
-
 use base64::Engine as _;
-use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use uuid::Uuid;
 
 use crate::error::Result;
 use crate::progress::ProgressTracker;
-use crate::source::ReadOnlySource;
 
 #[derive(Debug, Clone, Copy)]
 pub enum SyncTarget {
     Contacts,
     Imessage,
     Whatsapp,
-    Calls,
+    AppleCalls,
+    WhatsappCalls,
     Gmail,
 }
 
@@ -55,24 +53,19 @@ pub(crate) fn run_with_progress(
 ) -> Result<Vec<SyncReport>> {
     let mut reports = Vec::new();
     if matches!(target, SyncTarget::Contacts) {
-        let transaction = crm.unchecked_transaction()?;
-        reports.push(contacts::sync(config, &transaction, progress)?);
-        transaction.commit()?;
+        reports.push(contacts::sync(config, crm, progress)?);
     }
     if matches!(target, SyncTarget::Imessage) {
-        let transaction = crm.unchecked_transaction()?;
-        reports.push(imessage::sync(config, &transaction, progress, 1, 4)?);
-        transaction.commit()?;
+        reports.push(imessage::sync(config, crm, progress, 1, 1)?);
     }
     if matches!(target, SyncTarget::Whatsapp) {
-        let transaction = crm.unchecked_transaction()?;
-        reports.push(whatsapp::sync(config, &transaction, progress, 2, 4)?);
-        transaction.commit()?;
+        reports.push(whatsapp::sync(config, crm, progress, 1, 1)?);
     }
-    if matches!(target, SyncTarget::Calls) {
-        let transaction = crm.unchecked_transaction()?;
-        reports.extend(calls::sync(config, &transaction, progress, 3, 4)?);
-        transaction.commit()?;
+    if matches!(target, SyncTarget::AppleCalls) {
+        reports.push(calls::sync_apple(config, crm, progress, 1, 1)?);
+    }
+    if matches!(target, SyncTarget::WhatsappCalls) {
+        reports.push(calls::sync_whatsapp(config, crm, progress, 1, 1)?);
     }
     if matches!(target, SyncTarget::Gmail) && !config.gmail.accounts.is_empty() {
         reports.extend(gmail::sync(config, crm, progress)?);
@@ -82,52 +75,6 @@ pub(crate) fn run_with_progress(
 
 pub(crate) fn gmail_backfill_pending(crm: &Connection) -> Result<bool> {
     gmail_backfill::has_pending(crm)
-}
-
-fn open_source(
-    crm: &Connection,
-    id: &str,
-    kind: &str,
-    path: &Path,
-    table: &str,
-    columns: &[&str],
-) -> Result<(ReadOnlySource, String, String)> {
-    let source = ReadOnlySource::open(path)?;
-    source.require_columns(table, columns)?;
-    let fingerprint = source.schema_fingerprint()?;
-    let run_at = Utc::now().to_rfc3339();
-    crm.execute(
-        "INSERT INTO sources(id, kind, schema_fingerprint, status) VALUES (?1, ?2, ?3, 'syncing')
-         ON CONFLICT(id) DO UPDATE SET schema_fingerprint = excluded.schema_fingerprint, status = 'syncing', error = NULL",
-        params![id, kind, fingerprint],
-    )?;
-    Ok((source, fingerprint, run_at))
-}
-
-fn finish_source(crm: &Connection, id: &str, run_at: &str) -> Result<usize> {
-    let mut statement = crm.prepare(
-        "SELECT native_id FROM interactions WHERE source_id = ?1 AND deleted_at IS NULL AND last_seen_at < ?2",
-    )?;
-    let deleted_ids: Vec<String> = statement
-        .query_map(params![id, run_at], |row| row.get(0))?
-        .collect::<std::result::Result<_, _>>()?;
-    drop(statement);
-    for native_id in &deleted_ids {
-        crm.execute(
-            "INSERT OR IGNORE INTO tombstones(source_id, native_id) VALUES (?1, ?2)",
-            params![id, native_id],
-        )?;
-    }
-    crm.execute(
-        "UPDATE interactions SET body = NULL, subject = NULL, deleted_at = CURRENT_TIMESTAMP
-         WHERE source_id = ?1 AND deleted_at IS NULL AND last_seen_at < ?2",
-        params![id, run_at],
-    )?;
-    crm.execute(
-        "UPDATE sources SET status = 'ok', last_sync_at = CURRENT_TIMESTAMP, last_reconcile_at = CURRENT_TIMESTAMP WHERE id = ?1",
-        [id],
-    )?;
-    Ok(deleted_ids.len())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -156,7 +103,17 @@ fn upsert_interaction(
     crm.execute(
         "INSERT INTO interactions(id, source_id, native_id, thread_native_id, channel, kind, occurred_at, direction, subject, body, metadata_json, last_seen_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
-         ON CONFLICT(source_id, native_id) DO UPDATE SET thread_native_id=excluded.thread_native_id, channel=excluded.channel, kind=excluded.kind, occurred_at=excluded.occurred_at, direction=excluded.direction, subject=excluded.subject, body=excluded.body, metadata_json=excluded.metadata_json, deleted_at=NULL, last_seen_at=excluded.last_seen_at",
+         ON CONFLICT(source_id, native_id) DO UPDATE SET
+           thread_native_id=excluded.thread_native_id, channel=excluded.channel,
+           kind=excluded.kind, occurred_at=excluded.occurred_at,
+           direction=excluded.direction, subject=excluded.subject, body=excluded.body,
+           metadata_json=excluded.metadata_json, deleted_at=NULL,
+           last_seen_at=excluded.last_seen_at,
+           analysis_state=CASE
+             WHEN COALESCE(interactions.subject, '') != COALESCE(excluded.subject, '')
+               OR COALESCE(interactions.body, '') != COALESCE(excluded.body, '')
+               OR interactions.deleted_at IS NOT NULL
+             THEN 'pending' ELSE interactions.analysis_state END",
         params![id, source_id, native_id, thread_id, channel, kind, occurred_at, direction, subject, body, metadata.to_string(), run_at],
     )?;
     Ok(id)

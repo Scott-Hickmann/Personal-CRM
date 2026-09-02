@@ -6,11 +6,14 @@ use serde::Serialize;
 
 use crate::error::{CrmError, Result};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, clap::ValueEnum, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum JobKind {
     Contacts,
-    Communications,
+    Imessage,
+    Whatsapp,
+    AppleCalls,
+    WhatsappCalls,
     Gmail,
     Analysis,
     Scoring,
@@ -23,7 +26,10 @@ impl JobKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Contacts => "contacts",
-            Self::Communications => "communications",
+            Self::Imessage => "imessage",
+            Self::Whatsapp => "whatsapp",
+            Self::AppleCalls => "apple_calls",
+            Self::WhatsappCalls => "whatsapp_calls",
             Self::Gmail => "gmail",
             Self::Analysis => "analysis",
             Self::Scoring => "scoring",
@@ -36,7 +42,10 @@ impl JobKind {
     fn parse(value: &str) -> Result<Self> {
         match value {
             "contacts" => Ok(Self::Contacts),
-            "communications" => Ok(Self::Communications),
+            "imessage" => Ok(Self::Imessage),
+            "whatsapp" => Ok(Self::Whatsapp),
+            "apple_calls" => Ok(Self::AppleCalls),
+            "whatsapp_calls" => Ok(Self::WhatsappCalls),
             "gmail" => Ok(Self::Gmail),
             "analysis" => Ok(Self::Analysis),
             "scoring" => Ok(Self::Scoring),
@@ -61,6 +70,11 @@ pub fn enqueue(
            reason=excluded.reason,
            run_after=CASE WHEN jobs.state='running' THEN jobs.run_after
                           ELSE MIN(jobs.run_after, excluded.run_after) END,
+           rerun_requested=CASE WHEN jobs.state='running' THEN 1
+                                ELSE jobs.rerun_requested END,
+           rerun_after=CASE WHEN jobs.state='running'
+                            THEN MIN(COALESCE(jobs.rerun_after, excluded.run_after), excluded.run_after)
+                            ELSE jobs.rerun_after END,
            updated_at=CURRENT_TIMESTAMP",
         params![kind.as_str(), reason, run_after],
     )?;
@@ -71,11 +85,36 @@ pub fn recover_running(connection: &Connection) -> Result<usize> {
     connection
         .execute(
             "UPDATE jobs SET state='queued', run_after=?1,
-             error='daemon restarted while job was running', updated_at=CURRENT_TIMESTAMP
+             error='daemon restarted while job was running', rerun_requested=0,
+             rerun_after=NULL, updated_at=CURRENT_TIMESTAMP
              WHERE state='running'",
             [Utc::now().to_rfc3339()],
         )
         .map_err(Into::into)
+}
+
+pub fn recover_job(connection: &Connection, id: i64, error: &str) -> Result<()> {
+    connection.execute(
+        "UPDATE jobs SET state='queued', run_after=?2, error=?3,
+         rerun_requested=0, rerun_after=NULL,
+         updated_at=CURRENT_TIMESTAMP WHERE id=?1 AND state='running'",
+        params![id, (Utc::now() + Duration::seconds(30)).to_rfc3339(), error],
+    )?;
+    Ok(())
+}
+
+pub fn recover_kind(connection: &Connection, kind: JobKind, error: &str) -> Result<()> {
+    connection.execute(
+        "UPDATE jobs SET state='queued', run_after=?2, error=?3,
+         rerun_requested=0, rerun_after=NULL,
+         updated_at=CURRENT_TIMESTAMP WHERE kind=?1 AND state='running'",
+        params![
+            kind.as_str(),
+            (Utc::now() + Duration::seconds(30)).to_rfc3339(),
+            error
+        ],
+    )?;
+    Ok(())
 }
 
 pub fn unresolved_failed_count(connection: &Connection) -> Result<i64> {
@@ -94,16 +133,33 @@ pub fn unresolved_failed_count(connection: &Connection) -> Result<i64> {
         .map_err(Into::into)
 }
 
-pub fn process_one(config_path: &Path, connection: &Connection) -> Result<bool> {
-    let job: Option<(i64, String, i64)> = connection
+pub fn ready(connection: &Connection) -> Result<Vec<(i64, JobKind)>> {
+    let mut statement = connection.prepare(
+        "SELECT id, kind FROM jobs
+         WHERE state='queued' AND run_after<=?1 ORDER BY run_after, id",
+    )?;
+    statement
+        .query_map([Utc::now().to_rfc3339()], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?
+        .map(|row| {
+            let (id, kind) = row?;
+            Ok((id, JobKind::parse(&kind)?))
+        })
+        .collect()
+}
+
+pub fn process(config_path: &Path, id: i64) -> Result<bool> {
+    let mut connection = crate::commands::open_database(config_path)?;
+    let job: Option<(String, i64)> = connection
         .query_row(
-            "SELECT id, kind, attempts FROM jobs
-             WHERE state='queued' AND run_after<=?1 ORDER BY run_after, id LIMIT 1",
-            [Utc::now().to_rfc3339()],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            "SELECT kind, attempts FROM jobs
+             WHERE id=?1 AND state='queued' AND run_after<=?2",
+            params![id, Utc::now().to_rfc3339()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
-    let Some((id, kind, attempts)) = job else {
+    let Some((kind, attempts)) = job else {
         return Ok(false);
     };
     if connection.execute(
@@ -112,24 +168,59 @@ pub fn process_one(config_path: &Path, connection: &Connection) -> Result<bool> 
         [id],
     )? == 0
     {
-        return Ok(true);
+        return Ok(false);
     }
     let kind = JobKind::parse(&kind)?;
     let mut progress = crate::progress::ProgressTracker::start(config_path, id, kind.as_str());
     match crate::job_runner::run_with_progress(config_path, kind, &mut progress) {
         Ok(()) => {
-            connection.execute(
+            let transaction =
+                connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let rerun_after: Option<String> = transaction
+                .query_row(
+                    "SELECT rerun_after FROM jobs WHERE id=?1 AND rerun_requested=1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .flatten();
+            transaction.execute(
                 "UPDATE jobs SET state='complete', completed_at=CURRENT_TIMESTAMP,
-                 updated_at=CURRENT_TIMESTAMP, error=NULL WHERE id=?1",
+                 updated_at=CURRENT_TIMESTAMP, error=NULL, rerun_requested=0,
+                 rerun_after=NULL WHERE id=?1",
                 [id],
             )?;
-            enqueue_downstream(connection, kind)?;
+            let rerun = rerun_after.is_some();
+            if let Some(run_after) = rerun_after {
+                transaction.execute(
+                    "INSERT INTO jobs(kind, reason, run_after)
+                     VALUES (?1, 'changes arrived while job was running', ?2)",
+                    params![kind.as_str(), run_after],
+                )?;
+            }
+            enqueue_downstream(&transaction, kind, rerun)?;
+            transaction.commit()?;
             progress.idle(format!("Completed {}", kind.as_str()));
         }
         Err(error) => {
             let retry = attempts < 4;
-            connection.execute(
-                "UPDATE jobs SET state=?2, run_after=?3, error=?4, updated_at=CURRENT_TIMESTAMP
+            let transaction =
+                connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let rerun_after: Option<String> = if retry {
+                None
+            } else {
+                transaction
+                    .query_row(
+                        "SELECT rerun_after FROM jobs WHERE id=?1 AND rerun_requested=1",
+                        [id],
+                        |row| row.get(0),
+                    )
+                    .optional()?
+                    .flatten()
+            };
+            transaction.execute(
+                "UPDATE jobs SET state=?2, run_after=?3, error=?4,
+                 rerun_requested=0, rerun_after=NULL, updated_at=CURRENT_TIMESTAMP
                  WHERE id=?1",
                 params![
                     id,
@@ -138,6 +229,15 @@ pub fn process_one(config_path: &Path, connection: &Connection) -> Result<bool> 
                     error.to_string()
                 ],
             )?;
+            if let Some(run_after) = rerun_after {
+                transaction.execute(
+                    "INSERT INTO jobs(kind, reason, run_after)
+                     VALUES (?1, 'changes arrived during failed job', ?2)",
+                    params![kind.as_str(), run_after],
+                )?;
+            }
+            transaction.commit()?;
+            record_source_failure(&connection, kind, &error.to_string())?;
             progress.idle(if retry {
                 format!("{} failed; retry scheduled: {error}", kind.as_str())
             } else {
@@ -148,11 +248,30 @@ pub fn process_one(config_path: &Path, connection: &Connection) -> Result<bool> 
     Ok(true)
 }
 
+fn record_source_failure(connection: &Connection, kind: JobKind, error: &str) -> Result<()> {
+    let source = match kind {
+        JobKind::Contacts => Some(("id", "contacts")),
+        JobKind::Imessage => Some(("id", "imessage")),
+        JobKind::Whatsapp => Some(("id", "whatsapp")),
+        JobKind::AppleCalls => Some(("id", "apple_calls")),
+        JobKind::WhatsappCalls => Some(("id", "whatsapp_calls")),
+        JobKind::Gmail => Some(("kind", "gmail")),
+        _ => None,
+    };
+    if let Some((column, value)) = source {
+        connection.execute(
+            &format!("UPDATE sources SET status='failed', error=?2 WHERE {column}=?1"),
+            params![value, error],
+        )?;
+    }
+    Ok(())
+}
+
 pub fn run(config_path: &Path, kind: JobKind) -> Result<()> {
     crate::job_runner::run(config_path, kind)
 }
 
-fn enqueue_downstream(connection: &Connection, kind: JobKind) -> Result<()> {
+fn enqueue_downstream(connection: &Connection, kind: JobKind, rerun: bool) -> Result<()> {
     match kind {
         JobKind::Contacts => {
             enqueue(
@@ -167,13 +286,19 @@ fn enqueue_downstream(connection: &Connection, kind: JobKind) -> Result<()> {
                 "contacts reconciled",
                 Duration::zero(),
             )?;
+            enqueue(
+                connection,
+                JobKind::Gmail,
+                "contacts reconciled",
+                Duration::zero(),
+            )?;
         }
-        JobKind::Communications => {
+        JobKind::Imessage | JobKind::Whatsapp | JobKind::AppleCalls | JobKind::WhatsappCalls => {
             enqueue(
                 connection,
                 JobKind::Analysis,
                 "new interactions",
-                Duration::seconds(30),
+                Duration::zero(),
             )?;
             enqueue(
                 connection,
@@ -187,7 +312,7 @@ fn enqueue_downstream(connection: &Connection, kind: JobKind) -> Result<()> {
                 connection,
                 JobKind::Analysis,
                 "new interactions",
-                Duration::seconds(30),
+                Duration::zero(),
             )?;
             enqueue(
                 connection,
@@ -205,18 +330,30 @@ fn enqueue_downstream(connection: &Connection, kind: JobKind) -> Result<()> {
             }
         }
         JobKind::Analysis => {
-            enqueue(
-                connection,
-                JobKind::Scoring,
-                "analysis complete",
-                Duration::zero(),
-            )?;
-            if crate::analysis::has_pending(connection)? {
+            let pending = crate::analysis::has_pending(connection)?;
+            if pending {
                 enqueue(
                     connection,
                     JobKind::Analysis,
-                    "more interactions await analysis",
-                    Duration::seconds(2),
+                    "new interactions arrived during analysis",
+                    Duration::zero(),
+                )?;
+            }
+            let importing: bool = connection.query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM jobs WHERE state IN ('queued', 'running')
+                     AND kind IN ('imessage', 'whatsapp', 'apple_calls',
+                                  'whatsapp_calls', 'gmail')
+                 )",
+                [],
+                |row| row.get(0),
+            )?;
+            if !rerun && !pending && !importing {
+                enqueue(
+                    connection,
+                    JobKind::Scoring,
+                    "analysis queue drained",
+                    Duration::zero(),
                 )?;
             }
         }
@@ -226,101 +363,5 @@ fn enqueue_downstream(connection: &Connection, kind: JobKind) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::db;
-
-    #[test]
-    fn coalesces_open_jobs_by_kind() {
-        let directory = tempfile::tempdir().unwrap();
-        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
-        enqueue(
-            &connection,
-            JobKind::Contacts,
-            "first",
-            Duration::seconds(5),
-        )
-        .unwrap();
-        enqueue(&connection, JobKind::Contacts, "second", Duration::zero()).unwrap();
-        let count: i64 = connection
-            .query_row("SELECT COUNT(*) FROM jobs", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(count, 1);
-    }
-
-    #[test]
-    fn recovers_jobs_interrupted_by_a_daemon_restart() {
-        let directory = tempfile::tempdir().unwrap();
-        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
-        enqueue(
-            &connection,
-            JobKind::GooglePublish,
-            "test",
-            Duration::zero(),
-        )
-        .unwrap();
-        connection
-            .execute("UPDATE jobs SET state='running'", [])
-            .unwrap();
-
-        assert_eq!(recover_running(&connection).unwrap(), 1);
-        let (state, error): (String, Option<String>) = connection
-            .query_row("SELECT state, error FROM jobs", [], |row| {
-                Ok((row.get(0)?, row.get(1)?))
-            })
-            .unwrap();
-        assert_eq!(state, "queued");
-        assert_eq!(
-            error.as_deref(),
-            Some("daemon restarted while job was running")
-        );
-    }
-
-    #[test]
-    fn counts_unresolved_failure_kinds_instead_of_historical_rows() {
-        let directory = tempfile::tempdir().unwrap();
-        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
-        connection
-            .execute_batch(
-                "INSERT INTO jobs(kind, state, reason) VALUES
-                    ('gmail', 'failed', 'first'),
-                    ('gmail', 'failed', 'second'),
-                    ('analysis', 'failed', 'third');",
-            )
-            .unwrap();
-        assert_eq!(unresolved_failed_count(&connection).unwrap(), 2);
-
-        connection
-            .execute(
-                "INSERT INTO jobs(kind, state, reason) VALUES ('gmail', 'complete', 'recovered')",
-                [],
-            )
-            .unwrap();
-        assert_eq!(unresolved_failed_count(&connection).unwrap(), 1);
-    }
-
-    #[test]
-    fn continues_resumable_gmail_backfill_after_each_batch() {
-        let directory = tempfile::tempdir().unwrap();
-        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
-        connection
-            .execute_batch(
-                "INSERT INTO sources(id, kind, last_sync_at)
-                 VALUES ('gmail:test', 'gmail', CURRENT_TIMESTAMP);
-                 INSERT INTO gmail_sync_scopes(source_id, scope_key, kind, query)
-                 VALUES ('gmail:test', 'contact:test', 'contact', 'from:test@example.com');",
-            )
-            .unwrap();
-
-        enqueue_downstream(&connection, JobKind::Gmail).unwrap();
-
-        let gmail_jobs: i64 = connection
-            .query_row(
-                "SELECT COUNT(*) FROM jobs WHERE kind='gmail' AND state='queued'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(gmail_jobs, 1);
-    }
-}
+#[path = "jobs/tests.rs"]
+mod tests;

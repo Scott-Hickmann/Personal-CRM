@@ -80,3 +80,31 @@ fn exports_company_type_and_labeled_fields_from_read_only_database() {
     assert_eq!(exported[0].phones[0].value, "555-0100");
     assert!(exported[1].is_company);
 }
+
+#[test]
+fn contact_change_token_tracks_core_data_versions() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("AddressBook-v22.abcddb");
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE ZABCDRECORD (Z_PK INTEGER PRIMARY KEY, Z_OPT INTEGER);
+             CREATE TABLE ZABCDEMAILADDRESS (
+                Z_PK INTEGER PRIMARY KEY, Z_OPT INTEGER, ZOWNER INTEGER
+             );
+             CREATE TABLE ZABCDPHONENUMBER (
+                Z_PK INTEGER PRIMARY KEY, Z_OPT INTEGER, ZOWNER INTEGER
+             );
+             INSERT INTO ZABCDRECORD VALUES (1, 1);
+             INSERT INTO ZABCDEMAILADDRESS VALUES (1, 1, 1);",
+        )
+        .unwrap();
+
+    let before = change_token(&path, "local").unwrap().unwrap();
+    connection
+        .execute("UPDATE ZABCDEMAILADDRESS SET Z_OPT=2 WHERE Z_PK=1", [])
+        .unwrap();
+    let after = change_token(&path, "local").unwrap().unwrap();
+
+    assert_ne!(before, after);
+}

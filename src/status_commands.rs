@@ -22,11 +22,25 @@ pub(crate) struct Status {
     daemon_pid: Option<i64>,
     queued_jobs: i64,
     running_jobs: i64,
+    rerun_jobs: i64,
+    running_activity: Vec<ProgressSnapshot>,
     failed_jobs: i64,
     pending_reviews: i64,
     active_people: i64,
     retired_people: i64,
     migration_people: i64,
+    pending_analysis: i64,
+    sources: Vec<SourceStatus>,
+}
+
+#[derive(Serialize)]
+struct SourceStatus {
+    id: String,
+    status: String,
+    cursor: Option<String>,
+    last_sync_at: Option<String>,
+    last_reconcile_at: Option<String>,
+    error: Option<String>,
 }
 
 pub(crate) fn initialized(
@@ -43,11 +57,15 @@ pub(crate) fn initialized(
         daemon_pid: None,
         queued_jobs: 0,
         running_jobs: 0,
+        rerun_jobs: 0,
+        running_activity: Vec::new(),
         failed_jobs: 0,
         pending_reviews: 0,
         active_people: 0,
         retired_people: 0,
         migration_people: 1,
+        pending_analysis: 0,
+        sources: Vec::new(),
     }
 }
 
@@ -75,8 +93,7 @@ fn live(format: Format, config_path: &Path, connection: &Connection) -> Result<(
     }
     loop {
         let status = collect(config_path, connection)?;
-        let progress = crate::progress::read(config_path);
-        let screen = live_screen(&status, progress.as_ref());
+        let screen = live_screen(&status);
         print!("\x1b[H\x1b[2J{screen}");
         std::io::stdout().flush().map_err(|source| CrmError::Io {
             path: PathBuf::from("stdout"),
@@ -97,6 +114,41 @@ fn collect(config_path: &Path, connection: &Connection) -> Result<Status> {
     )?;
     let daemon_running = daemon_pid.is_some_and(crate::daemon::process_is_running);
     let count = |sql| connection.query_row(sql, [], |row| row.get::<_, i64>(0));
+    let mut statement =
+        connection.prepare("SELECT id, kind FROM jobs WHERE state='running' ORDER BY kind")?;
+    let running: Vec<(i64, String)> = statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<std::result::Result<_, _>>()?;
+    let running_activity = running
+        .into_iter()
+        .map(|(id, kind)| {
+            crate::progress::read(config_path, &kind)
+                .filter(|progress| progress.job_id == Some(id) && progress.state == "running")
+                .unwrap_or_else(|| ProgressSnapshot {
+                    job_id: Some(id),
+                    job_kind: Some(kind.clone()),
+                    state: "running".into(),
+                    message: format!("Starting {kind}"),
+                    ..ProgressSnapshot::default()
+                })
+        })
+        .collect();
+    let sources = connection
+        .prepare(
+            "SELECT id, status, cursor, last_sync_at, last_reconcile_at, error
+             FROM sources ORDER BY id",
+        )?
+        .query_map([], |row| {
+            Ok(SourceStatus {
+                id: row.get(0)?,
+                status: row.get(1)?,
+                cursor: row.get(2)?,
+                last_sync_at: row.get(3)?,
+                last_reconcile_at: row.get(4)?,
+                error: row.get(5)?,
+            })
+        })?
+        .collect::<std::result::Result<_, _>>()?;
     Ok(Status {
         config_path: config_path.to_owned(),
         database_path,
@@ -106,6 +158,8 @@ fn collect(config_path: &Path, connection: &Connection) -> Result<Status> {
         daemon_pid,
         queued_jobs: count("SELECT COUNT(*) FROM jobs WHERE state='queued'")?,
         running_jobs: count("SELECT COUNT(*) FROM jobs WHERE state='running'")?,
+        rerun_jobs: count("SELECT COUNT(*) FROM jobs WHERE state='running' AND rerun_requested=1")?,
+        running_activity,
         failed_jobs: crate::jobs::unresolved_failed_count(connection)?,
         pending_reviews: count("SELECT COUNT(*) FROM review_items WHERE status='pending'")?,
         active_people: count("SELECT COUNT(*) FROM people WHERE lifecycle_state='active'")?,
@@ -114,12 +168,17 @@ fn collect(config_path: &Path, connection: &Connection) -> Result<Status> {
             "SELECT COUNT(*) FROM people p WHERE lifecycle_state='migration_pending'
              AND NOT EXISTS (SELECT 1 FROM person_merges m WHERE m.source_person_id=p.id)",
         )?,
+        pending_analysis: count(
+            "SELECT COUNT(*) FROM interactions WHERE analysis_state='pending'
+             AND deleted_at IS NULL AND body IS NOT NULL AND trim(body) != ''",
+        )?,
+        sources,
     })
 }
 
 fn summary(status: &Status) -> String {
-    format!(
-        "daemon         {}{}\nschema version  {}\nsources         {}\npeople          {} active, {} retired, {} migration\njobs            {} queued, {} running, {} failed\nreview          {} pending",
+    let mut output = format!(
+        "daemon         {}{}\nschema version  {}\nsources         {}\npeople          {} active, {} retired, {} migration\njobs            {} queued, {} running, {} rerun, {} failed\nanalysis        {} pending\nreview          {} pending",
         if status.daemon_running {
             "running"
         } else {
@@ -136,34 +195,68 @@ fn summary(status: &Status) -> String {
         status.migration_people,
         status.queued_jobs,
         status.running_jobs,
+        status.rerun_jobs,
         status.failed_jobs,
+        status.pending_analysis,
         status.pending_reviews
-    )
+    );
+    if !status.sources.is_empty() {
+        output.push_str("\n\nSource status\n");
+        for source in &status.sources {
+            output.push_str(&format!(
+                "{:<18} {:<8} sync {}  audit {}  cursor {}{}\n",
+                source.id,
+                source.status,
+                source.last_sync_at.as_deref().unwrap_or("-"),
+                source.last_reconcile_at.as_deref().unwrap_or("-"),
+                source.cursor.as_deref().unwrap_or("-"),
+                source
+                    .error
+                    .as_deref()
+                    .map(|error| format!("  error {error}"))
+                    .unwrap_or_default(),
+            ));
+        }
+        output.pop();
+    }
+    output
 }
 
-fn live_screen(status: &Status, progress: Option<&ProgressSnapshot>) -> String {
+fn live_screen(status: &Status) -> String {
     let mut output = format!("CRM live status — Ctrl-C to exit\n\n{}", summary(status));
     output.push_str("\n\nCurrent activity\n");
     if !status.daemon_running {
         output.push_str("Daemon is stopped; no live activity.");
-    } else if let Some(progress) = progress {
-        output.push_str(&progress.message);
-        if progress.state == "running" {
+    } else if !status.running_activity.is_empty() {
+        for progress in &status.running_activity {
             output.push_str(&format!(
-                "\nStage {} / {}",
-                progress.stage_current, progress.stage_total
+                "{}  {}",
+                progress.job_kind.as_deref().unwrap_or("job"),
+                progress.message
             ));
-            output.push('\n');
-            output.push_str(&progress_bar(progress));
+            if progress.state == "running" {
+                output.push_str(&format!(
+                    "\nStage {} / {}\n{}",
+                    progress.stage_current,
+                    progress.stage_total,
+                    progress_bar(progress)
+                ));
+            }
+            output.push_str("\n\n");
         }
+        output.pop();
+        output.pop();
     } else {
-        output.push_str("Waiting for the daemon's first progress update.");
+        output.push_str("Waiting for work.");
     }
-    if let Some(progress) = progress
-        && !progress.events.is_empty()
-    {
+    let events: Vec<_> = status
+        .running_activity
+        .iter()
+        .flat_map(|progress| progress.events.iter())
+        .collect();
+    if !events.is_empty() {
         output.push_str("\n\nRecent activity\n");
-        for event in &progress.events {
+        for event in events {
             output.push_str(&format!("{}  {}\n", local_time(&event.at), event.message));
         }
         output.pop();
@@ -227,6 +320,7 @@ mod tests {
     #[test]
     fn renders_known_progress() {
         let progress = ProgressSnapshot {
+            job_kind: Some("whatsapp".into()),
             current: 1234,
             total: 5000,
             total_is_estimate: true,
@@ -262,7 +356,8 @@ mod tests {
             unit: Some("messages".into()),
             ..ProgressSnapshot::default()
         };
-        let screen = live_screen(&status, Some(&progress));
+        status.running_activity.push(progress);
+        let screen = live_screen(&status);
         assert!(screen.contains("Stage 2 / 4"));
         assert!(screen.contains("25 / 100 messages (25%)"));
         assert!(!screen.contains("working"));

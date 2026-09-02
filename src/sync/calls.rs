@@ -1,25 +1,13 @@
 use rusqlite::Connection;
 use std::collections::HashSet;
 
+use super::incremental::{finish_incremental_source, incremental_floor, open_incremental_source};
 use super::whatsapp_identity::LidResolver;
-use super::{SyncReport, add_participant, finish_source, open_source, upsert_interaction};
+use super::{SyncReport, add_participant, upsert_interaction};
 use crate::error::{CrmError, Result};
 use crate::progress::ProgressTracker;
 
-pub fn sync(
-    config: &crate::config::Config,
-    crm: &Connection,
-    progress: &mut ProgressTracker,
-    stage_current: u64,
-    stage_total: u64,
-) -> Result<Vec<SyncReport>> {
-    Ok(vec![
-        sync_apple(config, crm, progress, stage_current, stage_total)?,
-        sync_whatsapp(config, crm, progress, stage_current + 1, stage_total)?,
-    ])
-}
-
-fn sync_apple(
+pub(super) fn sync_apple(
     config: &crate::config::Config,
     crm: &Connection,
     progress: &mut ProgressTracker,
@@ -31,7 +19,7 @@ fn sync_apple(
         .apple_calls
         .as_ref()
         .ok_or_else(|| CrmError::InvalidConfig("Apple calls path is not configured".into()))?;
-    let (source, fingerprint, run_at) = open_source(
+    let source = open_incremental_source(
         crm,
         "apple_calls",
         "calls",
@@ -43,12 +31,12 @@ fn sync_apple(
         "SELECT Z_PK, COALESCE(ZUNIQUE_ID, 'pk:' || Z_PK), datetime(ZDATE + 978307200, 'unixepoch'),
                 ZDURATION, ZADDRESS, ZORIGINATED, ZANSWERED, ZCALLTYPE, ZSERVICE_PROVIDER,
                 ZNAME, COUNT(*) OVER()
-         FROM ZCALLRECORD WHERE ZDATE IS NOT NULL",
+         FROM ZCALLRECORD WHERE ZDATE IS NOT NULL AND Z_PK > ?1",
     )?;
     let mut imported = HashSet::new();
-    let mut rows = statement.query([])?;
     let mut processed = 0_u64;
     let mut total = 0_u64;
+    let mut cursor = if source.audit { 0 } else { source.cursor };
     progress.stage(
         "Reading Apple call history",
         stage_current,
@@ -57,8 +45,10 @@ fn sync_apple(
         false,
         "query",
     );
+    let mut rows = statement.query([incremental_floor(&source)])?;
     while let Some(row) = rows.next()? {
         total = u64::try_from(row.get::<_, i64>(10)?).unwrap_or_default();
+        cursor = cursor.max(row.get(0)?);
         let native_id: String = row.get(1)?;
         imported.insert(native_id.clone());
         let originated = row.get::<_, i64>(5)? != 0;
@@ -76,7 +66,7 @@ fn sync_apple(
             None,
             None,
             &metadata,
-            &run_at,
+            &source.run_at,
         )?;
         if let Some(identity) = row.get::<_, Option<String>>(4)? {
             add_participant(
@@ -98,17 +88,17 @@ fn sync_apple(
     }
     progress.finish_stage("Read Apple call history", processed, total, false, "calls");
     progress.progress_now("Finalizing Apple call sync", 0, 1, false, "step");
-    let deleted = finish_source(crm, "apple_calls", &run_at)?;
+    let deleted = finish_incremental_source(crm, "apple_calls", &source, cursor)?;
     progress.finish_stage("Finalized Apple call sync", 1, 1, false, "step");
     Ok(SyncReport {
         source: "apple_calls".into(),
         imported: imported.len(),
         deleted,
-        schema_fingerprint: fingerprint,
+        schema_fingerprint: source.fingerprint.clone(),
     })
 }
 
-fn sync_whatsapp(
+pub(super) fn sync_whatsapp(
     config: &crate::config::Config,
     crm: &Connection,
     progress: &mut ProgressTracker,
@@ -125,7 +115,7 @@ fn sync_whatsapp(
         config.paths.whatsapp_calls.as_ref().ok_or_else(|| {
             CrmError::InvalidConfig("WhatsApp calls path is not configured".into())
         })?;
-    let (source, fingerprint, run_at) = open_source(
+    let source = open_incremental_source(
         crm,
         "whatsapp_calls",
         "calls",
@@ -137,13 +127,13 @@ fn sync_whatsapp(
         "SELECT e.Z_PK, COALESCE(e.ZCALLIDSTRING, 'pk:' || e.Z_PK), datetime(e.ZDATE + 978307200, 'unixepoch'),
                 e.ZDURATION, e.ZOUTCOME, p.ZJIDSTRING, COUNT(*) OVER()
          FROM ZWACDCALLEVENT e LEFT JOIN ZWACDCALLEVENTPARTICIPANT p ON p.Z1PARTICIPANTS = e.Z_PK
-         WHERE e.ZDATE IS NOT NULL",
+         WHERE e.ZDATE IS NOT NULL AND e.Z_PK > ?1",
     )?;
     let mut imported = HashSet::new();
     let mut cleared_participants = HashSet::new();
-    let mut rows = statement.query([])?;
     let mut processed = 0_u64;
     let mut total = 0_u64;
+    let mut cursor = if source.audit { 0 } else { source.cursor };
     progress.stage(
         "Reading WhatsApp call history",
         stage_current,
@@ -152,8 +142,10 @@ fn sync_whatsapp(
         false,
         "query",
     );
+    let mut rows = statement.query([incremental_floor(&source)])?;
     while let Some(row) = rows.next()? {
         total = u64::try_from(row.get::<_, i64>(6)?).unwrap_or_default();
+        cursor = cursor.max(row.get(0)?);
         let native_id: String = row.get(1)?;
         imported.insert(native_id.clone());
         let metadata = serde_json::json!({"duration_seconds": row.get::<_, f64>(3)?, "outcome": row.get::<_, i64>(4)?});
@@ -169,7 +161,7 @@ fn sync_whatsapp(
             None,
             None,
             &metadata,
-            &run_at,
+            &source.run_at,
         )?;
         if cleared_participants.insert(interaction_id.clone()) {
             crm.execute(
@@ -203,12 +195,12 @@ fn sync_whatsapp(
         "call records",
     );
     progress.progress_now("Finalizing WhatsApp call sync", 0, 1, false, "step");
-    let deleted = finish_source(crm, "whatsapp_calls", &run_at)?;
+    let deleted = finish_incremental_source(crm, "whatsapp_calls", &source, cursor)?;
     progress.finish_stage("Finalized WhatsApp call sync", 1, 1, false, "step");
     Ok(SyncReport {
         source: "whatsapp_calls".into(),
         imported: imported.len(),
         deleted,
-        schema_fingerprint: fingerprint,
+        schema_fingerprint: source.fingerprint.clone(),
     })
 }

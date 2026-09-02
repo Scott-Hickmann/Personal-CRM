@@ -136,11 +136,6 @@ pub(crate) fn reconcile_automatic(
     let connection = commands::open_database(config_path)?;
     let library = photos_library::discover_library(None)?;
     let catalog = PhotosCatalog::open(&library)?;
-    let current_people = catalog.named_people()?;
-    let current_by_id = current_people
-        .iter()
-        .map(|person| (person.person_uuid.as_str(), person))
-        .collect::<HashMap<_, _>>();
     progress.finish_stage("Loaded named Photos people", 1, 1, false, "query");
     let people = photo_links::review_people(&connection, None)?;
     let linked: Vec<_> = people
@@ -166,7 +161,7 @@ pub(crate) fn reconcile_automatic(
             );
             continue;
         };
-        if let Some(current) = current_by_id.get(uuid) {
+        if let Some(current) = catalog.named_person(uuid)? {
             if link.photos_name_snapshot.as_deref() != Some(current.name.as_str()) {
                 photo_links::link_photos_person(
                     &connection,

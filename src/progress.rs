@@ -60,7 +60,7 @@ impl ProgressTracker {
     }
 
     pub(crate) fn start(config_path: &Path, job_id: i64, job_kind: &str) -> Self {
-        let path = progress_path(config_path);
+        let path = progress_path(config_path, job_kind);
         let mut snapshot = read_path(&path).unwrap_or_default();
         snapshot.job_id = Some(job_id);
         snapshot.job_kind = Some(job_kind.to_owned());
@@ -190,41 +190,38 @@ impl ProgressTracker {
     }
 }
 
-pub(crate) fn read(config_path: &Path) -> Option<ProgressSnapshot> {
-    read_path(&progress_path(config_path))
+pub(crate) fn read(config_path: &Path, job_kind: &str) -> Option<ProgressSnapshot> {
+    read_path(&progress_path(config_path, job_kind))
 }
 
 pub(crate) fn record_interrupted(config_path: &Path, count: usize) {
     if count == 0 {
         return;
     }
-    let path = progress_path(config_path);
-    let mut snapshot = read_path(&path).unwrap_or_default();
-    append_event(
-        &mut snapshot,
-        format!("Recovered {count} interrupted job(s) for retry"),
-    );
-    snapshot.job_id = None;
-    snapshot.job_kind = None;
-    snapshot.state = "idle".into();
-    snapshot.message = "Waiting for work".into();
-    snapshot.stage_current = 0;
-    snapshot.stage_total = 0;
-    snapshot.current = 0;
-    snapshot.total = 0;
-    snapshot.total_is_estimate = false;
-    snapshot.unit = None;
-    snapshot.updated_at = Utc::now().to_rfc3339();
-    if let Err(error) = write_path(&path, &snapshot) {
-        eprintln!("CRM progress telemetry error: {error}");
+    let directory = progress_directory(config_path);
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry
+            .path()
+            .extension()
+            .is_some_and(|value| value == "json")
+        {
+            let _ = fs::remove_file(entry.path());
+        }
     }
 }
 
-fn progress_path(config_path: &Path) -> PathBuf {
+fn progress_directory(config_path: &Path) -> PathBuf {
     config_path
         .parent()
         .unwrap_or_else(|| Path::new("."))
-        .join("live-status.json")
+        .join("live-status")
+}
+
+fn progress_path(config_path: &Path, job_kind: &str) -> PathBuf {
+    progress_directory(config_path).join(format!("{job_kind}.json"))
 }
 
 fn read_path(path: &Path) -> Option<ProgressSnapshot> {
@@ -244,6 +241,10 @@ fn append_event(snapshot: &mut ProgressSnapshot, message: String) {
 }
 
 fn write_path(path: &Path, snapshot: &ProgressSnapshot) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
+    }
     let temporary = path.with_extension("json.tmp");
     let bytes = serde_json::to_vec(snapshot).map_err(std::io::Error::other)?;
     fs::write(&temporary, bytes)?;
@@ -272,7 +273,7 @@ mod tests {
             tracker.event(format!("Event {index}"));
         }
 
-        let snapshot = read(&config_path).unwrap();
+        let snapshot = read(&config_path, "gmail").unwrap();
         assert_eq!(snapshot.job_id, Some(42));
         assert_eq!(snapshot.stage_current, 1);
         assert_eq!(snapshot.stage_total, 2);
@@ -282,7 +283,7 @@ mod tests {
         assert_eq!(snapshot.events.last().unwrap().message, "Event 24");
 
         tracker.idle("Completed gmail");
-        let snapshot = read(&config_path).unwrap();
+        let snapshot = read(&config_path, "gmail").unwrap();
         assert_eq!(snapshot.state, "idle");
         assert_eq!(snapshot.message, "Waiting for work");
     }
@@ -291,20 +292,29 @@ mod tests {
     fn records_interrupted_jobs_as_idle_and_retryable() {
         let directory = tempfile::tempdir().unwrap();
         let config_path = directory.path().join("config.toml");
-        ProgressTracker::start(&config_path, 7, "communications");
+        ProgressTracker::start(&config_path, 7, "whatsapp");
 
         record_interrupted(&config_path, 1);
 
-        let snapshot = read(&config_path).unwrap();
-        assert_eq!(snapshot.state, "idle");
-        assert_eq!(snapshot.job_id, None);
-        assert!(
-            snapshot
-                .events
-                .last()
-                .unwrap()
-                .message
-                .contains("interrupted")
+        assert!(read(&config_path, "whatsapp").is_none());
+    }
+
+    #[test]
+    fn keeps_concurrent_job_progress_separate() {
+        let directory = tempfile::tempdir().unwrap();
+        let config_path = directory.path().join("config.toml");
+        let mut gmail = ProgressTracker::start(&config_path, 1, "gmail");
+        let mut photos = ProgressTracker::start(&config_path, 2, "photos");
+        gmail.progress_now("Reading Gmail", 1, 10, false, "emails");
+        photos.progress_now("Reading Photos", 2, 5, false, "people");
+
+        assert_eq!(
+            read(&config_path, "gmail").unwrap().message,
+            "Reading Gmail"
+        );
+        assert_eq!(
+            read(&config_path, "photos").unwrap().message,
+            "Reading Photos"
         );
     }
 }

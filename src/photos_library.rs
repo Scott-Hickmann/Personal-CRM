@@ -4,6 +4,7 @@ use serde::Serialize;
 
 use crate::error::{CrmError, Result};
 use crate::source::ReadOnlySource;
+use rusqlite::OptionalExtension;
 
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct NamedPhotosPerson {
@@ -68,6 +69,23 @@ impl PhotosCatalog {
         )?;
         let rows = statement.query_map([asset_uuid], map_person)?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
+    pub(crate) fn named_person(&self, person_uuid: &str) -> Result<Option<NamedPhotosPerson>> {
+        self.source
+            .connection()
+            .query_row(
+                "SELECT p.ZPERSONUUID, p.ZDISPLAYNAME, a.ZUUID
+                 FROM ZPERSON p
+                 LEFT JOIN ZDETECTEDFACE f ON f.Z_PK = p.ZKEYFACE
+                 LEFT JOIN ZASSET a ON a.Z_PK = f.ZASSETFORFACE
+                 WHERE p.ZPERSONUUID = ?1
+                   AND COALESCE(TRIM(p.ZDISPLAYNAME), '') <> ''",
+                [person_uuid],
+                map_person,
+            )
+            .optional()
+            .map_err(Into::into)
     }
 }
 
@@ -151,6 +169,10 @@ mod tests {
         assert_eq!(
             catalog.named_people().unwrap()[0].key_asset_id.as_deref(),
             Some("asset-uuid")
+        );
+        assert_eq!(
+            catalog.named_person("person-uuid").unwrap().unwrap().name,
+            "Ada"
         );
     }
 }

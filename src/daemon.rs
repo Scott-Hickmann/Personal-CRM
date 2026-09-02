@@ -34,6 +34,8 @@ pub fn run(config_path: PathBuf) -> Result<()> {
     let mut watcher = SourceWatcher::new(&config)?;
     let mut gmail_due = Instant::now();
     let mut photos_due = Instant::now();
+    let mut audit_due = Instant::now();
+    let mut workers = HashMap::new();
     loop {
         connection.execute(
             "UPDATE daemon_state SET heartbeat_at=CURRENT_TIMESTAMP WHERE id=1",
@@ -48,13 +50,32 @@ pub fn run(config_path: PathBuf) -> Result<()> {
                 Duration::seconds(2),
             )?;
         }
-        if changed.communications {
-            jobs::enqueue(
-                &connection,
-                JobKind::Communications,
-                "local communication store changed",
-                Duration::seconds(2),
-            )?;
+        for (changed, kind, reason) in [
+            (
+                changed.imessage,
+                JobKind::Imessage,
+                "iMessage store changed",
+            ),
+            (
+                changed.whatsapp,
+                JobKind::Whatsapp,
+                "WhatsApp store changed",
+            ),
+            (
+                changed.apple_calls,
+                JobKind::AppleCalls,
+                "Apple call store changed",
+            ),
+            (
+                changed.whatsapp_calls,
+                JobKind::WhatsappCalls,
+                "WhatsApp call store changed",
+            ),
+            (changed.photos, JobKind::Photos, "Photos store changed"),
+        ] {
+            if changed {
+                jobs::enqueue(&connection, kind, reason, Duration::seconds(2))?;
+            }
         }
         if gmail_due.elapsed() >= StdDuration::from_secs(60) {
             jobs::enqueue(
@@ -74,8 +95,29 @@ pub fn run(config_path: PathBuf) -> Result<()> {
             )?;
             photos_due = Instant::now();
         }
-        while jobs::process_one(&config_path, &connection)? {}
-        thread::sleep(StdDuration::from_secs(2));
+        if audit_due.elapsed() >= StdDuration::from_secs(86_400) {
+            for kind in [
+                JobKind::Imessage,
+                JobKind::Whatsapp,
+                JobKind::AppleCalls,
+                JobKind::WhatsappCalls,
+            ] {
+                jobs::enqueue(&connection, kind, "daily deletion audit", Duration::zero())?;
+            }
+            audit_due = Instant::now();
+        }
+        reap_workers(&connection, &mut workers)?;
+        for (id, kind) in jobs::ready(&connection)? {
+            if workers.contains_key(&kind) {
+                continue;
+            }
+            let worker_config = config_path.clone();
+            workers.insert(
+                kind,
+                thread::spawn(move || (id, jobs::process(&worker_config, id))),
+            );
+        }
+        thread::sleep(StdDuration::from_millis(500));
     }
 }
 
@@ -91,7 +133,10 @@ pub(crate) fn process_is_running(pid: i64) -> bool {
 fn enqueue_initial(connection: &rusqlite::Connection) -> Result<()> {
     for (kind, reason) in [
         (JobKind::Contacts, "daemon startup"),
-        (JobKind::Communications, "daemon startup"),
+        (JobKind::Imessage, "daemon startup"),
+        (JobKind::Whatsapp, "daemon startup"),
+        (JobKind::AppleCalls, "daemon startup"),
+        (JobKind::WhatsappCalls, "daemon startup"),
         (JobKind::Gmail, "daemon startup"),
         (JobKind::Photos, "daemon startup"),
     ] {
@@ -102,12 +147,20 @@ fn enqueue_initial(connection: &rusqlite::Connection) -> Result<()> {
 
 struct Changes {
     contacts: bool,
-    communications: bool,
+    imessage: bool,
+    whatsapp: bool,
+    apple_calls: bool,
+    whatsapp_calls: bool,
+    photos: bool,
 }
 
 struct SourceWatcher {
     contacts: Vec<PathBuf>,
-    communications: Vec<PathBuf>,
+    imessage: Vec<PathBuf>,
+    whatsapp: Vec<PathBuf>,
+    apple_calls: Vec<PathBuf>,
+    whatsapp_calls: Vec<PathBuf>,
+    photos: Vec<PathBuf>,
     stamps: HashMap<PathBuf, Option<SystemTime>>,
 }
 
@@ -120,35 +173,79 @@ impl SourceWatcher {
         ) {
             contacts = watched_paths(&apple::container_path(path, container)?);
         }
-        let communications = [
-            config.paths.imessage.as_ref(),
-            config.paths.whatsapp.as_ref(),
-            config.paths.apple_calls.as_ref(),
-            config.paths.whatsapp_calls.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        .flat_map(|path| watched_paths(path))
-        .collect();
+        let watched = |path: Option<&PathBuf>| {
+            path.into_iter()
+                .flat_map(|path| watched_paths(path))
+                .collect()
+        };
+        let photos = crate::photos_library::discover_library(None)
+            .ok()
+            .map(|library| watched_paths(&library.join("database/Photos.sqlite")))
+            .unwrap_or_default();
         let mut watcher = Self {
             contacts,
-            communications,
+            imessage: watched(config.paths.imessage.as_ref()),
+            whatsapp: watched(config.paths.whatsapp.as_ref()),
+            apple_calls: watched(config.paths.apple_calls.as_ref()),
+            whatsapp_calls: watched(config.paths.whatsapp_calls.as_ref()),
+            photos,
             stamps: HashMap::new(),
         };
-        for path in watcher.contacts.iter().chain(&watcher.communications) {
-            watcher.stamps.insert(path.clone(), modified(path)?);
+        let paths: Vec<_> = watcher.paths().cloned().collect();
+        for path in paths {
+            watcher.stamps.insert(path.clone(), modified(&path)?);
         }
         Ok(watcher)
     }
 
     fn changed(&mut self) -> Result<Changes> {
-        let contacts = changed_group(&self.contacts, &mut self.stamps)?;
-        let communications = changed_group(&self.communications, &mut self.stamps)?;
         Ok(Changes {
-            contacts,
-            communications,
+            contacts: changed_group(&self.contacts, &mut self.stamps)?,
+            imessage: changed_group(&self.imessage, &mut self.stamps)?,
+            whatsapp: changed_group(&self.whatsapp, &mut self.stamps)?,
+            apple_calls: changed_group(&self.apple_calls, &mut self.stamps)?,
+            whatsapp_calls: changed_group(&self.whatsapp_calls, &mut self.stamps)?,
+            photos: changed_group(&self.photos, &mut self.stamps)?,
         })
     }
+
+    fn paths(&self) -> impl Iterator<Item = &PathBuf> {
+        self.contacts
+            .iter()
+            .chain(&self.imessage)
+            .chain(&self.whatsapp)
+            .chain(&self.apple_calls)
+            .chain(&self.whatsapp_calls)
+            .chain(&self.photos)
+    }
+}
+
+type Worker = thread::JoinHandle<(i64, Result<bool>)>;
+
+fn reap_workers(
+    connection: &rusqlite::Connection,
+    workers: &mut HashMap<JobKind, Worker>,
+) -> Result<()> {
+    let finished: Vec<_> = workers
+        .iter()
+        .filter(|(_, worker)| worker.is_finished())
+        .map(|(kind, _)| *kind)
+        .collect();
+    for kind in finished {
+        let worker = workers.remove(&kind).unwrap();
+        match worker.join() {
+            Ok((_, Ok(_))) => {}
+            Ok((id, Err(error))) => {
+                jobs::recover_job(connection, id, &error.to_string())?;
+                eprintln!("{} worker failed: {error}", kind.as_str());
+            }
+            Err(_) => {
+                jobs::recover_kind(connection, kind, "worker panicked")?;
+                eprintln!("{} worker panicked", kind.as_str());
+            }
+        }
+    }
+    Ok(())
 }
 
 fn watched_paths(path: &Path) -> Vec<PathBuf> {

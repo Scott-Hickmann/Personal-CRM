@@ -26,6 +26,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     ),
     (11, include_str!("../migrations/011_gmail_people_sync.sql")),
     (12, include_str!("../migrations/012_hybrid_affinity.sql")),
+    (13, include_str!("../migrations/013_concurrent_jobs.sql")),
 ];
 
 pub fn open(path: &Path) -> Result<Connection> {
@@ -90,7 +91,7 @@ mod tests {
         let path = directory.path().join("crm.sqlite3");
         drop(open(&path).unwrap());
         let connection = open(&path).unwrap();
-        assert_eq!(schema_version(&connection).unwrap(), 12);
+        assert_eq!(schema_version(&connection).unwrap(), 13);
     }
 
     #[test]
@@ -128,7 +129,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(schema_version(&connection).unwrap(), 12);
+        assert_eq!(schema_version(&connection).unwrap(), 13);
         assert_eq!(score, None);
         assert_eq!(state, "pending");
         assert_eq!(
@@ -137,6 +138,34 @@ mod tests {
                     .get::<_, i64>(0))
                 .unwrap(),
             0
+        );
+    }
+
+    #[test]
+    fn concurrent_jobs_migration_splits_legacy_communications_work() {
+        let connection = Connection::open_in_memory().unwrap();
+        for (_, sql) in MIGRATIONS.iter().filter(|(version, _)| *version <= 12) {
+            connection.execute_batch(sql).unwrap();
+        }
+        connection
+            .execute(
+                "INSERT INTO jobs(kind, reason) VALUES ('communications', 'legacy')",
+                [],
+            )
+            .unwrap();
+
+        migrate(&connection).unwrap();
+
+        let kinds: Vec<String> = connection
+            .prepare("SELECT kind FROM jobs ORDER BY kind")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            kinds,
+            ["apple_calls", "imessage", "whatsapp", "whatsapp_calls"]
         );
     }
 }

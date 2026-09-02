@@ -68,10 +68,9 @@ pub fn recalculate_all(connection: &Connection, progress: &mut ProgressTracker) 
     }
     let ratings = ratings(connection)?;
     let calibration = fit_calibration(&candidates, &ratings);
-    let transaction = connection.unchecked_transaction()?;
     for (index, candidate) in candidates.iter().enumerate() {
         persist(
-            &transaction,
+            connection,
             candidate,
             &calibration,
             ratings.get(&candidate.person_id).copied(),
@@ -84,7 +83,6 @@ pub fn recalculate_all(connection: &Connection, progress: &mut ProgressTracker) 
             "people",
         );
     }
-    transaction.commit()?;
     progress.finish_stage(
         "Recalculated relationship scores",
         total,

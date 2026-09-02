@@ -1,13 +1,13 @@
 mod model;
 mod store;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 
 use self::model::{AnalysisOutput, InputInteraction, InputParticipant, model_input, restore_ids};
 use self::store::persist;
 use crate::config::Config;
-use crate::error::{CrmError, Result};
+use crate::error::Result;
 use crate::ollama::OllamaClient;
 use crate::progress::ProgressTracker;
 
@@ -23,14 +23,8 @@ pub struct AnalysisReport {
 pub fn run(
     config: &Config,
     connection: &Connection,
-    limit: u32,
     progress: &mut ProgressTracker,
 ) -> Result<AnalysisReport> {
-    if !(1..=100).contains(&limit) {
-        return Err(CrmError::InvalidConfig(
-            "analysis limit must be between 1 and 100".into(),
-        ));
-    }
     progress.stage(
         "Selecting interactions for analysis",
         1,
@@ -39,9 +33,9 @@ pub fn run(
         false,
         "query",
     );
-    let inputs = pending(connection, limit)?;
+    let ids = pending_ids(connection)?;
     progress.finish_stage("Selected interactions for analysis", 1, 1, false, "query");
-    if inputs.is_empty() {
+    if ids.is_empty() {
         progress.stage("Analyzing interactions", 2, 2, 0, false, "interactions");
         progress.finish_stage("Analyzed interactions", 0, 0, false, "interactions");
         return Ok(AnalysisReport {
@@ -52,26 +46,29 @@ pub fn run(
             relationship_signals: 0,
         });
     }
-    analyze_interactions(config, connection, &inputs, progress)
+    analyze_interactions(config, connection, &ids, progress)
 }
 
 fn analyze_interactions(
     config: &Config,
     connection: &Connection,
-    inputs: &[InputInteraction],
+    ids: &[String],
     progress: &mut ProgressTracker,
 ) -> Result<AnalysisReport> {
     let client = OllamaClient::new(&config.ollama)?;
-    let total = inputs.len() as u64;
+    let total = ids.len() as u64;
     let mut report = AnalysisReport {
-        selected: inputs.len(),
+        selected: ids.len(),
         analyzed: 0,
         mentions: 0,
         relationships: 0,
         relationship_signals: 0,
     };
     progress.stage("Analyzing interactions", 2, 2, total, false, "interactions");
-    for (index, input) in inputs.iter().enumerate() {
+    for (index, id) in ids.iter().enumerate() {
+        let Some(input) = pending_interaction(connection, id)? else {
+            continue;
+        };
         progress.progress_now(
             format!("Analyzing interaction {} of {total}", index + 1),
             report.analyzed as u64,
@@ -79,7 +76,7 @@ fn analyze_interactions(
             false,
             "interactions",
         );
-        let interaction = std::slice::from_ref(input);
+        let interaction = std::slice::from_ref(&input);
         let mut output: AnalysisOutput = client.analyze(&model_input(interaction))?;
         restore_ids(interaction, &mut output)?;
         let summaries: Vec<_> = output
@@ -105,9 +102,9 @@ fn analyze_interactions(
     Ok(report)
 }
 
-fn pending(connection: &Connection, limit: u32) -> Result<Vec<InputInteraction>> {
+fn pending_ids(connection: &Connection) -> Result<Vec<String>> {
     let mut statement = connection.prepare(
-        "SELECT id, channel, occurred_at, direction, subject, body
+        "SELECT id
          FROM interactions
          WHERE analysis_state='pending' AND deleted_at IS NULL AND body IS NOT NULL AND trim(body) != ''
            AND EXISTS (
@@ -119,26 +116,12 @@ fn pending(connection: &Connection, limit: u32) -> Result<Vec<InputInteraction>>
                  WHERE own.person_id=p.id AND own.is_self=1 AND own.active=1
                )
            )
-         ORDER BY occurred_at DESC LIMIT ?1",
+         ORDER BY occurred_at DESC, id",
     )?;
-    let mut inputs = statement
-        .query_map([limit], |row| {
-            let body: String = row.get(5)?;
-            Ok(InputInteraction {
-                interaction_id: row.get(0)?,
-                channel: row.get(1)?,
-                occurred_at: row.get(2)?,
-                direction: row.get(3)?,
-                subject: row.get(4)?,
-                body: body.chars().take(6_000).collect(),
-                participants: Vec::new(),
-            })
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    for input in &mut inputs {
-        input.participants = participants(connection, &input.interaction_id)?;
-    }
-    Ok(inputs)
+    statement
+        .query_map([], |row| row.get(0))?
+        .collect::<std::result::Result<_, _>>()
+        .map_err(Into::into)
 }
 
 pub(crate) fn has_pending(connection: &Connection) -> Result<bool> {
@@ -162,6 +145,35 @@ pub(crate) fn has_pending(connection: &Connection) -> Result<bool> {
             |row| row.get(0),
         )
         .map_err(Into::into)
+}
+
+fn pending_interaction(connection: &Connection, id: &str) -> Result<Option<InputInteraction>> {
+    let input = connection
+        .query_row(
+            "SELECT id, channel, occurred_at, direction, subject, body
+             FROM interactions WHERE id=?1 AND analysis_state='pending'
+               AND deleted_at IS NULL AND body IS NOT NULL AND trim(body) != ''",
+            [id],
+            |row| {
+                let body: String = row.get(5)?;
+                Ok(InputInteraction {
+                    interaction_id: row.get(0)?,
+                    channel: row.get(1)?,
+                    occurred_at: row.get(2)?,
+                    direction: row.get(3)?,
+                    subject: row.get(4)?,
+                    body: body.chars().take(6_000).collect(),
+                    participants: Vec::new(),
+                })
+            },
+        )
+        .optional()?;
+    input
+        .map(|mut input| {
+            input.participants = participants(connection, &input.interaction_id)?;
+            Ok(input)
+        })
+        .transpose()
 }
 
 fn participants(connection: &Connection, interaction_id: &str) -> Result<Vec<InputParticipant>> {
@@ -210,17 +222,54 @@ mod tests {
             )
             .unwrap();
 
-        let selected = pending(&connection, 100).unwrap();
+        let selected = pending_ids(&connection).unwrap();
 
         assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].participants[0].display_name, "Alex");
-        assert!(has_pending(&connection).unwrap());
+        let input = pending_interaction(&connection, &selected[0])
+            .unwrap()
+            .unwrap();
+        assert_eq!(input.participants[0].display_name, "Alex");
         connection
             .execute(
                 "UPDATE interactions SET analysis_state='complete' WHERE id='linked'",
                 [],
             )
             .unwrap();
-        assert!(!has_pending(&connection).unwrap());
+        assert!(pending_ids(&connection).unwrap().is_empty());
+    }
+
+    #[test]
+    fn selects_more_than_one_hundred_pending_interactions() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = crate::db::open(&directory.path().join("crm.sqlite3")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO sources(id, kind) VALUES ('source', 'test')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state)
+             VALUES ('person', 'Alex', 'apple-1', 'active')",
+                [],
+            )
+            .unwrap();
+        for index in 0..205 {
+            connection.execute(
+                "INSERT INTO interactions(id, source_id, native_id, channel, kind, occurred_at, body)
+                 VALUES (?1, 'source', ?1, 'imessage', 'message', '2026-01-01', 'hello')",
+                [format!("interaction-{index}")],
+            ).unwrap();
+            connection
+                .execute(
+                    "INSERT INTO interaction_participants(interaction_id, person_id, role)
+                 VALUES (?1, 'person', 'sender')",
+                    [format!("interaction-{index}")],
+                )
+                .unwrap();
+        }
+
+        assert_eq!(pending_ids(&connection).unwrap().len(), 205);
     }
 }

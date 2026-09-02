@@ -22,16 +22,23 @@ pub(crate) fn run_with_progress(
         JobKind::Contacts => {
             sync::run_with_progress(SyncTarget::Contacts, &config, &connection, progress)?;
         }
-        JobKind::Communications => {
+        JobKind::Imessage => {
             sync::run_with_progress(SyncTarget::Imessage, &config, &connection, progress)?;
+        }
+        JobKind::Whatsapp => {
             sync::run_with_progress(SyncTarget::Whatsapp, &config, &connection, progress)?;
-            sync::run_with_progress(SyncTarget::Calls, &config, &connection, progress)?;
+        }
+        JobKind::AppleCalls => {
+            sync::run_with_progress(SyncTarget::AppleCalls, &config, &connection, progress)?;
+        }
+        JobKind::WhatsappCalls => {
+            sync::run_with_progress(SyncTarget::WhatsappCalls, &config, &connection, progress)?;
         }
         JobKind::Gmail => {
             sync::run_with_progress(SyncTarget::Gmail, &config, &connection, progress)?;
         }
         JobKind::Analysis => {
-            analysis::run(&config, &connection, 100, progress)?;
+            analysis::run(&config, &connection, progress)?;
         }
         JobKind::Scoring => {
             scoring::recalculate_all(&connection, progress)?;

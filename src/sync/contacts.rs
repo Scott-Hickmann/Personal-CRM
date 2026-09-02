@@ -36,6 +36,41 @@ pub fn sync(
             "the authoritative contact container is not an iCloud account".into(),
         ));
     }
+    let fingerprint = apple::schema_fingerprint(configured, container)?;
+    let change_token = apple::change_token(configured, container)?;
+    let unchanged = if let Some(token) = change_token.as_deref() {
+        crm.query_row(
+            "SELECT cursor=?2 AND schema_fingerprint=?3 FROM sources WHERE id=?1",
+            params!["contacts", token, fingerprint],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or(false)
+    } else {
+        false
+    };
+    if unchanged {
+        progress.stage(
+            "Checking the iCloud contact change token",
+            1,
+            1,
+            1,
+            false,
+            "query",
+        );
+        crm.execute(
+            "UPDATE sources SET status='ok', error=NULL, last_sync_at=CURRENT_TIMESTAMP
+             WHERE id='contacts'",
+            [],
+        )?;
+        progress.finish_stage("iCloud contacts are unchanged", 1, 1, false, "query");
+        return Ok(SyncReport {
+            source: "contacts".into(),
+            imported: 0,
+            deleted: 0,
+            schema_fingerprint: fingerprint,
+        });
+    }
     progress.stage(
         "Loading the iCloud contact snapshot",
         1,
@@ -55,7 +90,6 @@ pub fn sync(
         "companies",
     );
     refresh_company_exclusions_with_progress(crm, &companies, progress)?;
-    let fingerprint = apple::schema_fingerprint(configured, container)?;
     let conflicts = duplicate_identities(&contacts);
     let mut active_collisions = HashSet::new();
     enqueue_collisions(crm, &conflicts, &mut active_collisions)?;
@@ -105,12 +139,13 @@ pub fn sync(
     review::enqueue_unresolved_candidates(crm)?;
     progress.progress("Finalizing contact links", 3, 4, false, "steps");
     crm.execute(
-        "INSERT INTO sources(id, kind, account, schema_fingerprint, status, last_sync_at, last_reconcile_at)
-         VALUES ('contacts', 'contacts', ?1, ?2, 'ok', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        "INSERT INTO sources(id, kind, account, schema_fingerprint, cursor, status, last_sync_at, last_reconcile_at)
+         VALUES ('contacts', 'contacts', ?1, ?2, ?3, 'ok', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
          ON CONFLICT(id) DO UPDATE SET account=excluded.account,
-         schema_fingerprint=excluded.schema_fingerprint, status='ok', error=NULL,
+         schema_fingerprint=excluded.schema_fingerprint, cursor=excluded.cursor,
+         status='ok', error=NULL,
          last_sync_at=CURRENT_TIMESTAMP, last_reconcile_at=CURRENT_TIMESTAMP",
-        params![container, fingerprint],
+        params![container, fingerprint, change_token],
     )?;
     progress.finish_stage("Finalized contact links", 4, 4, false, "steps");
     Ok(SyncReport {

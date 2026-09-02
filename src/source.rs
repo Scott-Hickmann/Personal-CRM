@@ -25,12 +25,7 @@ impl ReadOnlySource {
     }
 
     pub fn require_columns(&self, table: &str, required: &[&str]) -> Result<()> {
-        let escaped = table.replace('"', "\"\"");
-        let sql = format!("PRAGMA table_info(\"{escaped}\")");
-        let mut statement = self.connection.prepare(&sql)?;
-        let columns: Vec<String> = statement
-            .query_map([], |row| row.get(1))?
-            .collect::<std::result::Result<_, _>>()?;
+        let columns = self.columns(table)?;
         let missing: Vec<_> = required
             .iter()
             .filter(|column| !columns.iter().any(|actual| actual == **column))
@@ -44,6 +39,23 @@ impl ReadOnlySource {
                 missing.join(", ")
             )))
         }
+    }
+
+    pub fn has_columns(&self, table: &str, required: &[&str]) -> Result<bool> {
+        let columns = self.columns(table)?;
+        Ok(required
+            .iter()
+            .all(|column| columns.iter().any(|actual| actual == *column)))
+    }
+
+    fn columns(&self, table: &str) -> Result<Vec<String>> {
+        let escaped = table.replace('"', "\"\"");
+        let sql = format!("PRAGMA table_info(\"{escaped}\")");
+        let mut statement = self.connection.prepare(&sql)?;
+        statement
+            .query_map([], |row| row.get(1))?
+            .collect::<std::result::Result<_, _>>()
+            .map_err(Into::into)
     }
 
     pub fn connection(&self) -> &Connection {

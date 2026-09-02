@@ -5,6 +5,7 @@ use std::process::{Command, Stdio};
 
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::error::{CrmError, Result};
 use crate::source::ReadOnlySource;
@@ -196,6 +197,36 @@ pub fn container_path(configured: &Path, container_id: &str) -> Result<PathBuf> 
 pub fn schema_fingerprint(configured: &Path, container_id: &str) -> Result<String> {
     let source = ReadOnlySource::open(&container_path(configured, container_id)?)?;
     source.schema_fingerprint()
+}
+
+pub fn change_token(configured: &Path, container_id: &str) -> Result<Option<String>> {
+    let source = ReadOnlySource::open(&container_path(configured, container_id)?)?;
+    for table in ["ZABCDRECORD", "ZABCDEMAILADDRESS", "ZABCDPHONENUMBER"] {
+        if !source.has_columns(table, &["Z_PK", "Z_OPT"])? {
+            return Ok(None);
+        }
+    }
+    let mut digest = Sha256::new();
+    for (table, owner) in [
+        ("ZABCDRECORD", None),
+        ("ZABCDEMAILADDRESS", Some("ZOWNER")),
+        ("ZABCDPHONENUMBER", Some("ZOWNER")),
+    ] {
+        let owner = owner
+            .map(|column| format!(", COALESCE({column}, 0)"))
+            .unwrap_or_default();
+        let sql = format!("SELECT Z_PK, COALESCE(Z_OPT, 0){owner} FROM {table} ORDER BY Z_PK");
+        let mut statement = source.connection().prepare(&sql)?;
+        let columns = if owner.is_empty() { 2 } else { 3 };
+        let mut rows = statement.query([])?;
+        digest.update(table.as_bytes());
+        while let Some(row) = rows.next()? {
+            for index in 0..columns {
+                digest.update(row.get::<_, i64>(index)?.to_le_bytes());
+            }
+        }
+    }
+    Ok(Some(format!("{:x}", digest.finalize())))
 }
 
 fn labeled_values(
