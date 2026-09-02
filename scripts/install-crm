@@ -12,6 +12,11 @@ STAGED="$DESTINATION.new.$$"
 cleanup() {
     rm -f -- "$STAGED"
 }
+
+designated_requirement() {
+    codesign -d -r- "$1" 2>&1 | sed -n 's/^designated => //p'
+}
+
 trap cleanup EXIT HUP INT TERM
 
 if [ "$(uname -s)" != Darwin ]; then
@@ -31,9 +36,9 @@ install -m 0755 "$SOURCE" "$STAGED"
 codesign --force --identifier "$IDENTIFIER" --sign "$IDENTITY" --timestamp=none "$STAGED"
 codesign --verify --strict --verbose=2 "$STAGED"
 
-NEW_REQUIREMENT=$(codesign -d -r- "$STAGED" 2>&1)
+NEW_REQUIREMENT=$(designated_requirement "$STAGED")
 if [ -e "$DESTINATION" ]; then
-    OLD_REQUIREMENT=$(codesign -d -r- "$DESTINATION" 2>&1 || true)
+    OLD_REQUIREMENT=$(designated_requirement "$DESTINATION" || true)
     if [ "$OLD_REQUIREMENT" != "$NEW_REQUIREMENT" ]; then
         echo "error: refusing to replace CRM with a different designated requirement" >&2
         echo "installed: $OLD_REQUIREMENT" >&2
