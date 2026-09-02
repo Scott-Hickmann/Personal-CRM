@@ -40,6 +40,8 @@ mod review_commands;
 mod scoring;
 mod source;
 mod sync;
+mod ui_commands;
+mod ui_data;
 
 use clap::Parser;
 

@@ -253,6 +253,29 @@ pub fn add_tag(
     )
 }
 
+pub fn add_followup(
+    connection: &Connection,
+    reference: &str,
+    body: &str,
+    due_at: Option<&str>,
+    dry_run: bool,
+) -> Result<MutationPreview> {
+    mutate(
+        connection,
+        reference,
+        "followup.add",
+        serde_json::json!({"body": body, "due_at": due_at}),
+        dry_run,
+        |connection, person_id| {
+            connection.execute(
+                "INSERT INTO followups(id, person_id, body, due_at) VALUES (?1, ?2, ?3, ?4)",
+                params![Uuid::new_v4().to_string(), person_id, body, due_at],
+            )?;
+            Ok(())
+        },
+    )
+}
+
 pub(crate) fn upsert_identity(
     connection: &Connection,
     person_id: &str,

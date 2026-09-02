@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::cli::{
-    Command, ConfigCommand, FactCommand, InitArgs, NoteCommand, PersonCommand, QueryArgs,
-    TagCommand,
+    Command, ConfigCommand, FactCommand, FollowupCommand, InitArgs, NoteCommand, PersonCommand,
+    QueryArgs, TagCommand, UiDataCommand,
 };
 use crate::config::{self, Config};
 use crate::db;
@@ -37,6 +37,8 @@ pub(crate) fn run(format: Format, config: Option<PathBuf>, command: Command) -> 
     }
     let config_path = config.unwrap_or(config::default_config_path()?);
     match command {
+        Command::Ui(args) => crate::ui_commands::run(args.port),
+        Command::UiData { command } => ui_data(format, config_path, command),
         Command::Config {
             command: ConfigCommand::Init(args),
         } => init(format, config_path, args),
@@ -54,6 +56,7 @@ pub(crate) fn run(format: Format, config: Option<PathBuf>, command: Command) -> 
         Command::Note { command } => note(format, config_path, command),
         Command::Fact { command } => fact(format, config_path, command),
         Command::Tag { command } => tag(format, config_path, command),
+        Command::Followup { command } => followup(format, config_path, command),
         Command::Query(args) => query_entities(format, config_path, args),
         Command::History(args) => crate::history_commands::run(format, config_path, args),
         Command::Explain(args) => crate::analytics_commands::explain(format, config_path, args),
@@ -62,6 +65,34 @@ pub(crate) fn run(format: Format, config: Option<PathBuf>, command: Command) -> 
         Command::Photos { command } => crate::photos_commands::run(format, config_path, command),
         Command::Contacts { command } => crate::contact_commands::run(format, config_path, command),
         Command::Auth { command } => crate::auth_commands::run(format, config_path, command),
+    }
+}
+
+fn ui_data(format: Format, config_path: PathBuf, command: UiDataCommand) -> Result<()> {
+    let connection = open_database(&config_path)?;
+    match command {
+        UiDataCommand::Overview => {
+            let result = crate::ui_data::overview(&connection)?;
+            output::emit(format, "ui-data.overview", &result, "CRM overview".into())
+        }
+        UiDataCommand::Person(args) => {
+            let result = crate::ui_data::person(&connection, &args.person, args.history_limit)?;
+            output::emit(
+                format,
+                "ui-data.person",
+                &result,
+                result.person.display_name.clone(),
+            )
+        }
+        UiDataCommand::Interaction(args) => {
+            let result = crate::ui_data::interaction(&connection, &args.interaction)?;
+            output::emit(
+                format,
+                "ui-data.interaction",
+                &result,
+                result.body.clone().unwrap_or_default(),
+            )
+        }
     }
 }
 
@@ -197,6 +228,24 @@ fn tag(format: Format, config_path: PathBuf, command: TagCommand) -> Result<()> 
         "tag.add",
         &result,
         format!("{}  #{}", result.person_id, args.tag),
+    )
+}
+
+fn followup(format: Format, config_path: PathBuf, command: FollowupCommand) -> Result<()> {
+    let connection = open_database(&config_path)?;
+    let FollowupCommand::Add(args) = command;
+    let result = repository::add_followup(
+        &connection,
+        &args.person,
+        &args.text,
+        args.due.as_deref(),
+        args.dry_run,
+    )?;
+    output::emit(
+        format,
+        "followup.add",
+        &result,
+        format!("{}  follow-up added", result.person_id),
     )
 }
 

@@ -19,6 +19,12 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub(crate) enum Command {
+    Ui(UiArgs),
+    #[command(hide = true)]
+    UiData {
+        #[command(subcommand)]
+        command: UiDataCommand,
+    },
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
@@ -47,6 +53,10 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: TagCommand,
     },
+    Followup {
+        #[command(subcommand)]
+        command: FollowupCommand,
+    },
     Query(QueryArgs),
     History(HistoryArgs),
     Explain(PersonReference),
@@ -67,6 +77,31 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: AuthCommand,
     },
+}
+
+#[derive(Args)]
+pub(crate) struct UiArgs {
+    #[arg(long, default_value_t = 3000)]
+    pub port: u16,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum UiDataCommand {
+    Overview,
+    Person(PersonDetailArgs),
+    Interaction(InteractionReference),
+}
+
+#[derive(Args)]
+pub(crate) struct PersonDetailArgs {
+    pub person: String,
+    #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u32).range(1..=1000))]
+    pub history_limit: u32,
+}
+
+#[derive(Args)]
+pub(crate) struct InteractionReference {
+    pub interaction: String,
 }
 
 #[derive(Subcommand)]
@@ -251,6 +286,11 @@ pub(crate) enum TagCommand {
     Add(TagAddArgs),
 }
 
+#[derive(Subcommand)]
+pub(crate) enum FollowupCommand {
+    Add(FollowupAddArgs),
+}
+
 #[derive(Args)]
 pub(crate) struct PersonReference {
     pub person: String,
@@ -284,6 +324,18 @@ pub(crate) struct TagAddArgs {
     pub person: String,
     #[arg(long)]
     pub tag: String,
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+#[derive(Args)]
+pub(crate) struct FollowupAddArgs {
+    #[arg(long)]
+    pub person: String,
+    #[arg(long)]
+    pub text: String,
+    #[arg(long)]
+    pub due: Option<String>,
     #[arg(long)]
     pub dry_run: bool,
 }
