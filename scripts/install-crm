@@ -1,0 +1,64 @@
+#!/bin/sh
+
+set -eu
+
+IDENTITY=${PERSONAL_CRM_CODESIGN_IDENTITY:-Personal CRM}
+DESTINATION=${PERSONAL_CRM_INSTALL_PATH:-"$HOME/.local/bin/crm"}
+IDENTIFIER=com.personal-crm.cli
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+SOURCE="$ROOT/target/release/crm"
+STAGED="$DESTINATION.new.$$"
+
+cleanup() {
+    rm -f -- "$STAGED"
+}
+trap cleanup EXIT HUP INT TERM
+
+if [ "$(uname -s)" != Darwin ]; then
+    echo "error: CRM installation requires macOS" >&2
+    exit 1
+fi
+
+if ! security find-identity -v -p codesigning 2>/dev/null | grep -F -- "$IDENTITY" >/dev/null; then
+    echo "error: code-signing identity '$IDENTITY' was not found" >&2
+    echo "Create it in Keychain Access or set PERSONAL_CRM_CODESIGN_IDENTITY." >&2
+    exit 1
+fi
+
+cargo build --locked --release --manifest-path "$ROOT/Cargo.toml"
+mkdir -p -- "$(dirname -- "$DESTINATION")"
+install -m 0755 "$SOURCE" "$STAGED"
+codesign --force --identifier "$IDENTIFIER" --sign "$IDENTITY" --timestamp=none "$STAGED"
+codesign --verify --strict --verbose=2 "$STAGED"
+
+NEW_REQUIREMENT=$(codesign -d -r- "$STAGED" 2>&1)
+if [ -e "$DESTINATION" ]; then
+    OLD_REQUIREMENT=$(codesign -d -r- "$DESTINATION" 2>&1 || true)
+    if [ "$OLD_REQUIREMENT" != "$NEW_REQUIREMENT" ]; then
+        echo "error: refusing to replace CRM with a different designated requirement" >&2
+        echo "installed: $OLD_REQUIREMENT" >&2
+        echo "new:       $NEW_REQUIREMENT" >&2
+        exit 1
+    fi
+fi
+
+mv -f -- "$STAGED" "$DESTINATION"
+trap - EXIT HUP INT TERM
+
+DOMAIN="gui/$(id -u)"
+SERVICE="$DOMAIN/com.personal-crm.daemon"
+PLIST="$HOME/Library/LaunchAgents/com.personal-crm.daemon.plist"
+if launchctl print "$SERVICE" >/dev/null 2>&1; then
+    CONFIGURED_EXECUTABLE=$(plutil -extract ProgramArguments.0 raw -o - "$PLIST" 2>/dev/null || true)
+    if [ "$CONFIGURED_EXECUTABLE" = "$DESTINATION" ]; then
+        launchctl kickstart -k "$SERVICE"
+        echo "Installed signed CRM at $DESTINATION and restarted the daemon."
+    else
+        launchctl bootout "$SERVICE"
+        echo "Installed signed CRM at $DESTINATION and stopped the daemon that used $CONFIGURED_EXECUTABLE."
+        echo "Complete the one-time Keychain migration, then run '$DESTINATION start'."
+    fi
+else
+    echo "Installed signed CRM at $DESTINATION. Run '$DESTINATION start' to start the daemon."
+fi
+echo "$NEW_REQUIREMENT"

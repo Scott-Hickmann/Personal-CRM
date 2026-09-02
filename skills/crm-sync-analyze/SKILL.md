@@ -12,19 +12,19 @@ The launchd-managed CRM daemon normally handles synchronization and analysis. Us
 1. Inspect daemon, job, review, and source status:
 
 ```sh
-cargo run --quiet --manifest-path /Users/scotthickmann/GitHub/Personal-CRM/Cargo.toml -- --format json status
+/Users/scotthickmann/.local/bin/crm --format json status
 ```
 
 2. Use `doctor` only when paths, permissions, or source schemas may be broken.
 3. Run only the recovery jobs needed for the request. A complete refresh is:
 
 ```sh
-cargo run --quiet --manifest-path /Users/scotthickmann/GitHub/Personal-CRM/Cargo.toml -- --format json run contacts
-cargo run --quiet --manifest-path /Users/scotthickmann/GitHub/Personal-CRM/Cargo.toml -- --format json run communications
-cargo run --quiet --manifest-path /Users/scotthickmann/GitHub/Personal-CRM/Cargo.toml -- --format json run gmail
-cargo run --quiet --manifest-path /Users/scotthickmann/GitHub/Personal-CRM/Cargo.toml -- --format json run analysis
-cargo run --quiet --manifest-path /Users/scotthickmann/GitHub/Personal-CRM/Cargo.toml -- --format json run scoring
-cargo run --quiet --manifest-path /Users/scotthickmann/GitHub/Personal-CRM/Cargo.toml -- --format json run google-publish
+/Users/scotthickmann/.local/bin/crm --format json run contacts
+/Users/scotthickmann/.local/bin/crm --format json run communications
+/Users/scotthickmann/.local/bin/crm --format json run gmail
+/Users/scotthickmann/.local/bin/crm --format json run analysis
+/Users/scotthickmann/.local/bin/crm --format json run scoring
+/Users/scotthickmann/.local/bin/crm --format json run google-publish
 ```
 
 4. Run `crm review` after contact reconciliation. Never approve migration links, contact creation, Google deletions, or collisions unless the user explicitly requested that exact review action.

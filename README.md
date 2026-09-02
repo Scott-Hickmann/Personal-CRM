@@ -11,12 +11,39 @@
 - Ollama with `qwen3.5:9b` and `embeddinggemma` for analysis
 - A Google OAuth desktop client JSON file for each Gmail setup session
 - The Google People API enabled on the OAuth project when publishing contacts
+- A persistent code-signing identity for Keychain access
 
-No binary installation is required. Add this to `~/.zshrc`:
+## Install
+
+The daemon must use a consistently signed executable. Otherwise macOS Keychain treats every rebuilt binary as a new application and asks for the login password once for each stored Google refresh token.
+
+Create a self-signed code-signing certificate named `Personal CRM` once:
+
+1. Open Keychain Access and choose **Certificate Assistant → Create a Certificate**.
+2. Name it `Personal CRM`, set **Identity Type** to **Self Signed Root**, set **Certificate Type** to **Code Signing**, and create it in the login keychain. Set the certificate's trust policy to **Always Trust**.
+3. Confirm that macOS recognizes the identity with `security find-identity -v -p codesigning`.
+
+An Apple Development or Developer ID certificate also works. Set `PERSONAL_CRM_CODESIGN_IDENTITY` to its name or SHA-1 hash when running the installer.
+
+Build, sign, and install the executable:
+
+```sh
+./scripts/install-crm
+```
+
+The default installed path is `~/.local/bin/crm`. Override it with `PERSONAL_CRM_INSTALL_PATH` if necessary. The installer refuses to replace an existing signed installation when its designated code requirement differs. It restarts a daemon already using that path. During the first migration from a development executable, it stops the old daemon so Keychain access can be migrated before the signed daemon starts.
+
+The first signing operation may ask for permission to use the certificate's private key. Choose **Always Allow** so later installations are also non-interactive.
+
+Add the installation directory to `PATH` in `~/.zshrc`:
 
 ```zsh
-alias crm='cargo run --quiet --manifest-path /Users/scotthickmann/GitHub/Personal-CRM/Cargo.toml --'
+export PATH="$HOME/.local/bin:$PATH"
 ```
+
+After the first signed installation, open Keychain Access and delete the existing `personal-crm.gmail` and `personal-crm.google-contacts` password items. Run the Gmail and Contacts authorization commands below again for each account, then run `crm start`. This one-time migration recreates the four refresh-token items for the signed executable; later signed upgrades retain access without password prompts. OAuth authorization state in Google and CRM synchronization checkpoints do not need to be reset.
+
+Use `cargo test` for development. Do not use `cargo run` for commands that access the real Keychain or launch the daemon, because its rebuilt development executable does not have the installed binary's identity.
 
 ## Initialize
 
@@ -242,7 +269,7 @@ The repository contains three skills:
 - `crm-update`: dry-run and apply notes, facts, tags, and explicitly selected contact reviews.
 - `crm-sync-analyze`: inspect daemon health or manually run recovery jobs.
 
-They are linked into `~/.agents/skills` during project setup. The skills invoke Cargo with the absolute manifest path, so they do not depend on the interactive zsh alias.
+They are linked into `~/.agents/skills` during project setup. The skills invoke the signed binary at `/Users/scotthickmann/.local/bin/crm`, so they do not depend on interactive shell configuration and do not cause Keychain to reevaluate a development build.
 
 ## Current limitations
 

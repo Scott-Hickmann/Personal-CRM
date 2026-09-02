@@ -5,7 +5,7 @@ description: Add a note, fact, or tag to an existing iCloud-backed CRM person, o
 
 # CRM Update
 
-Use the repository-local `crm` binary. The user has authorized unambiguous local overlay updates without an extra confirmation, but each note, fact, or tag mutation must pass a dry-run preview first. Contact review actions require an explicit request naming the candidate or target.
+Use the signed, installed `crm` binary. The user has authorized unambiguous local overlay updates without an extra confirmation, but each note, fact, or tag mutation must pass a dry-run preview first. Contact review actions require an explicit request naming the candidate or target.
 
 ## Workflow
 
@@ -22,25 +22,25 @@ Do not combine multiple inferred changes. Ask a concise question when the intend
 List pending contact reviews:
 
 ```sh
-cargo run --quiet --manifest-path /Users/scotthickmann/GitHub/Personal-CRM/Cargo.toml -- --format json review
+/Users/scotthickmann/.local/bin/crm --format json review
 ```
 
 Add a note:
 
 ```sh
-cargo run --quiet --manifest-path /Users/scotthickmann/GitHub/Personal-CRM/Cargo.toml -- --format json note add --person "PERSON" --text "NOTE" --dry-run
+/Users/scotthickmann/.local/bin/crm --format json note add --person "PERSON" --text "NOTE" --dry-run
 ```
 
 Set a structured fact:
 
 ```sh
-cargo run --quiet --manifest-path /Users/scotthickmann/GitHub/Personal-CRM/Cargo.toml -- --format json fact set --person "PERSON" --key "KEY" --value "VALUE" --dry-run
+/Users/scotthickmann/.local/bin/crm --format json fact set --person "PERSON" --key "KEY" --value "VALUE" --dry-run
 ```
 
 Add a tag:
 
 ```sh
-cargo run --quiet --manifest-path /Users/scotthickmann/GitHub/Personal-CRM/Cargo.toml -- --format json tag add --person "PERSON" --tag "TAG" --dry-run
+/Users/scotthickmann/.local/bin/crm --format json tag add --person "PERSON" --tag "TAG" --dry-run
 ```
 
 For the apply step, remove only `--dry-run`; preserve every other argument exactly.
@@ -48,7 +48,7 @@ For the apply step, remove only `--dry-run`; preserve every other argument exact
 When the user explicitly selects a pending contact candidate or migration review, apply that exact review ID:
 
 ```sh
-cargo run --quiet --manifest-path /Users/scotthickmann/GitHub/Personal-CRM/Cargo.toml -- --format json review "REVIEW-ID" --approve
+/Users/scotthickmann/.local/bin/crm --format json review "REVIEW-ID" --approve
 ```
 
 Use `--link-icloud CONTACT-ID` instead when the user explicitly chooses an existing iCloud contact. Approval can create an iCloud contact or delete one managed Google replica, so never infer review approval from a general request to update CRM data.
