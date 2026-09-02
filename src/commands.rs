@@ -37,7 +37,7 @@ pub(crate) fn run(format: Format, config: Option<PathBuf>, command: Command) -> 
     }
     let config_path = config.unwrap_or(config::default_config_path()?);
     match command {
-        Command::Ui(args) => crate::ui_commands::run(args.port),
+        Command::Ui(args) => crate::ui_commands::run(args.port, &config_path),
         Command::UiData { command } => ui_data(format, config_path, command),
         Command::Config {
             command: ConfigCommand::Init(args),

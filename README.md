@@ -6,6 +6,7 @@
 
 - macOS
 - Rust and Cargo
+- Node.js and pnpm 9 or newer for the local web companion
 - Full Disk Access for the terminal or Codex process when reading protected Apple and WhatsApp databases
 - Ollama with `qwen3.5:9b` and `embeddinggemma` for analysis
 - A Google OAuth desktop client JSON file for each Gmail setup session
@@ -99,6 +100,17 @@ crm status
 crm review
 crm stop
 ```
+
+## Local web companion
+
+Start the private Next.js companion through the Rust CLI:
+
+```sh
+crm ui
+crm ui --port 3100
+```
+
+The CLI starts `pnpm dev` in [`web/`](web/), binds it to the loopback interface only, and passes its own executable and active config path to the server. The app never opens the CRM database directly: contact search, detail views, interaction reveals, relationship graphs, notes, facts, tags, and follow-ups all execute through Rust CLI JSON commands. Message bodies appear as previews until explicitly revealed. The relationship page renders the complete inferred network in Cytoscape and supports person, type, confidence, affinity-tier, activity, and layout filters.
 
 The daemon watches the selected iCloud Contacts database, iMessage, WhatsApp, and call-history databases with a short debounce. It polls Gmail history every minute and reconciles Photos periodically. New interactions trigger bounded, debounced Ollama analysis followed by deterministic scoring. Jobs are coalesced in SQLite, survive restarts, and retry failures.
 
