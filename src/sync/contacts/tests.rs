@@ -2,6 +2,21 @@ use super::*;
 use crate::db;
 
 #[test]
+fn missing_change_token_requires_a_contact_refresh() {
+    let directory = tempfile::tempdir().unwrap();
+    let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
+    connection
+        .execute(
+            "INSERT INTO sources(id, kind, schema_fingerprint, cursor, status)
+             VALUES ('contacts', 'contacts', 'fingerprint', NULL, 'ok')",
+            [],
+        )
+        .unwrap();
+
+    assert!(!source_matches_change_token(&connection, "token", "fingerprint").unwrap());
+}
+
+#[test]
 fn retiring_contact_preserves_history_and_overlays() {
     let directory = tempfile::tempdir().unwrap();
     let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();

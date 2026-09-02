@@ -39,13 +39,7 @@ pub fn sync(
     let fingerprint = apple::schema_fingerprint(configured, container)?;
     let change_token = apple::change_token(configured, container)?;
     let unchanged = if let Some(token) = change_token.as_deref() {
-        crm.query_row(
-            "SELECT cursor=?2 AND schema_fingerprint=?3 FROM sources WHERE id=?1",
-            params!["contacts", token, fingerprint],
-            |row| row.get(0),
-        )
-        .optional()?
-        .unwrap_or(false)
+        source_matches_change_token(crm, token, &fingerprint)?
     } else {
         false
     };
@@ -154,6 +148,21 @@ pub fn sync(
         deleted: 0,
         schema_fingerprint: fingerprint,
     })
+}
+
+fn source_matches_change_token(
+    crm: &Connection,
+    change_token: &str,
+    schema_fingerprint: &str,
+) -> Result<bool> {
+    Ok(crm
+        .query_row(
+            "SELECT cursor IS ?2 AND schema_fingerprint=?3 FROM sources WHERE id=?1",
+            params!["contacts", change_token, schema_fingerprint],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or(false))
 }
 
 fn reconcile_contact(
