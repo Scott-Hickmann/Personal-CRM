@@ -7,4 +7,4 @@
 7. When you are done with a change, always commit and push. Split up your work in small commits as you are working that follow the `type: name` convention.
 8. Unless specified, always work on the current branch, never create or switch branches.
 9. Prompts should never live inside the code itself, they should be in their own markdown files loaded by the codebase (makes it easier for developers to find and tweak the prompts).
-
+10. Always run `./scripts/install-crm` after making a change.
