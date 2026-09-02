@@ -80,6 +80,22 @@ pub fn recover_running(connection: &Connection) -> Result<usize> {
         .map_err(Into::into)
 }
 
+pub fn unresolved_failed_count(connection: &Connection) -> Result<i64> {
+    connection
+        .query_row(
+            "SELECT COUNT(DISTINCT failed.kind) FROM jobs failed
+             WHERE failed.state='failed'
+             AND NOT EXISTS (
+                SELECT 1 FROM jobs succeeded
+                WHERE succeeded.kind=failed.kind AND succeeded.state='complete'
+                AND succeeded.id>failed.id
+             )",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(Into::into)
+}
+
 pub fn process_one(config_path: &Path, connection: &Connection) -> Result<bool> {
     let job: Option<(i64, String, i64)> = connection
         .query_row(
@@ -251,5 +267,28 @@ mod tests {
             error.as_deref(),
             Some("daemon restarted while job was running")
         );
+    }
+
+    #[test]
+    fn counts_unresolved_failure_kinds_instead_of_historical_rows() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO jobs(kind, state, reason) VALUES
+                    ('gmail', 'failed', 'first'),
+                    ('gmail', 'failed', 'second'),
+                    ('analysis', 'failed', 'third');",
+            )
+            .unwrap();
+        assert_eq!(unresolved_failed_count(&connection).unwrap(), 2);
+
+        connection
+            .execute(
+                "INSERT INTO jobs(kind, state, reason) VALUES ('gmail', 'complete', 'recovered')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(unresolved_failed_count(&connection).unwrap(), 1);
     }
 }

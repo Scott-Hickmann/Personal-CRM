@@ -1,11 +1,7 @@
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant, SystemTime};
 
@@ -33,13 +29,15 @@ pub fn run(config_path: PathBuf) -> Result<()> {
         [std::process::id()],
     )?;
     jobs::recover_running(&connection)?;
-    let heartbeat_connection = crate::db::open(&config_path.parent().unwrap().join("crm.sqlite3"))?;
-    let _heartbeat = Heartbeat::start(heartbeat_connection);
     enqueue_initial(&connection)?;
     let mut watcher = SourceWatcher::new(&config)?;
     let mut gmail_due = Instant::now();
     let mut photos_due = Instant::now();
     loop {
+        connection.execute(
+            "UPDATE daemon_state SET heartbeat_at=CURRENT_TIMESTAMP WHERE id=1",
+            [],
+        )?;
         let changed = watcher.changed()?;
         if changed.contacts {
             jobs::enqueue(
@@ -80,38 +78,13 @@ pub fn run(config_path: PathBuf) -> Result<()> {
     }
 }
 
-struct Heartbeat {
-    running: Arc<AtomicBool>,
-    thread: Option<thread::JoinHandle<()>>,
-}
-
-impl Heartbeat {
-    fn start(connection: rusqlite::Connection) -> Self {
-        let running = Arc::new(AtomicBool::new(true));
-        let thread_running = Arc::clone(&running);
-        let thread = thread::spawn(move || {
-            while thread_running.load(Ordering::Relaxed) {
-                let _ = connection.execute(
-                    "UPDATE daemon_state SET heartbeat_at=CURRENT_TIMESTAMP WHERE id=1",
-                    [],
-                );
-                thread::sleep(StdDuration::from_secs(2));
-            }
-        });
-        Self {
-            running,
-            thread: Some(thread),
-        }
-    }
-}
-
-impl Drop for Heartbeat {
-    fn drop(&mut self) {
-        self.running.store(false, Ordering::Relaxed);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
-    }
+pub(crate) fn process_is_running(pid: i64) -> bool {
+    Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 fn enqueue_initial(connection: &rusqlite::Connection) -> Result<()> {
@@ -222,10 +195,7 @@ impl DaemonLock {
     fn acquire(directory: &Path) -> Result<Self> {
         let path = directory.join("daemon.lock");
         if let Ok(pid) = fs::read_to_string(&path) {
-            let alive = Command::new("kill")
-                .args(["-0", pid.trim()])
-                .status()
-                .is_ok_and(|status| status.success());
+            let alive = pid.trim().parse().is_ok_and(process_is_running);
             if alive {
                 return Err(CrmError::InvalidConfig(format!(
                     "CRM daemon is already running as PID {}",

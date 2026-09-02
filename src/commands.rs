@@ -235,14 +235,13 @@ fn status(format: Format, config_path: PathBuf) -> Result<()> {
     let connection = db::open(&database_path)?;
     let source_count =
         connection.query_row("SELECT COUNT(*) FROM sources", [], |row| row.get(0))?;
-    let (daemon_pid, daemon_running): (Option<i64>, bool) = connection.query_row(
-        "SELECT pid, COALESCE(pid IS NOT NULL AND
-         (julianday('now')-julianday(heartbeat_at))*86400 < 10, 0)
-         FROM daemon_state WHERE id=1
-         UNION ALL SELECT NULL, 0 LIMIT 1",
+    let daemon_pid: Option<i64> = connection.query_row(
+        "SELECT pid FROM daemon_state WHERE id=1
+         UNION ALL SELECT NULL LIMIT 1",
         [],
-        |row| Ok((row.get(0)?, row.get(1)?)),
+        |row| row.get(0),
     )?;
+    let daemon_running = daemon_pid.is_some_and(crate::daemon::process_is_running);
     let count = |sql| connection.query_row(sql, [], |row| row.get::<_, i64>(0));
     let status = Status {
         config_path,
@@ -253,7 +252,7 @@ fn status(format: Format, config_path: PathBuf) -> Result<()> {
         daemon_pid,
         queued_jobs: count("SELECT COUNT(*) FROM jobs WHERE state='queued'")?,
         running_jobs: count("SELECT COUNT(*) FROM jobs WHERE state='running'")?,
-        failed_jobs: count("SELECT COUNT(*) FROM jobs WHERE state='failed'")?,
+        failed_jobs: crate::jobs::unresolved_failed_count(&connection)?,
         pending_reviews: count("SELECT COUNT(*) FROM review_items WHERE status='pending'")?,
         active_people: count("SELECT COUNT(*) FROM people WHERE lifecycle_state='active'")?,
         retired_people: count("SELECT COUNT(*) FROM people WHERE lifecycle_state='retired'")?,

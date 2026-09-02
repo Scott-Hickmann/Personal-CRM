@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -68,9 +68,8 @@ pub fn run(config: &Config, connection: &Connection, limit: u32) -> Result<Analy
         });
     }
     let client = OllamaClient::new(&config.ollama)?;
-    let output: AnalysisOutput = client.analyze(&AnalysisInput {
-        interactions: inputs.clone(),
-    })?;
+    let mut output: AnalysisOutput = client.analyze(&model_input(&inputs))?;
+    restore_interaction_ids(&inputs, &mut output)?;
     let summaries: Vec<_> = output
         .items
         .iter()
@@ -78,6 +77,51 @@ pub fn run(config: &Config, connection: &Connection, limit: u32) -> Result<Analy
         .collect();
     let embeddings = client.embed(&summaries)?;
     persist(config, connection, &inputs, output, embeddings)
+}
+
+fn model_input(inputs: &[InputInteraction]) -> AnalysisInput {
+    AnalysisInput {
+        interactions: inputs
+            .iter()
+            .enumerate()
+            .map(|(index, input)| InputInteraction {
+                interaction_id: format!("item-{index}"),
+                ..input.clone()
+            })
+            .collect(),
+    }
+}
+
+fn restore_interaction_ids(inputs: &[InputInteraction], output: &mut AnalysisOutput) -> Result<()> {
+    if output.items.len() != inputs.len() {
+        return Err(CrmError::Serialization(format!(
+            "Ollama returned {} items for {} interactions",
+            output.items.len(),
+            inputs.len()
+        )));
+    }
+    let mut seen = HashSet::new();
+    for item in &mut output.items {
+        let index = item
+            .interaction_id
+            .strip_prefix("item-")
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|index| *index < inputs.len())
+            .ok_or_else(|| {
+                CrmError::Serialization(format!(
+                    "Ollama returned unknown interaction id {}",
+                    item.interaction_id
+                ))
+            })?;
+        if !seen.insert(index) {
+            return Err(CrmError::Serialization(format!(
+                "Ollama returned duplicate interaction id {}",
+                item.interaction_id
+            )));
+        }
+        item.interaction_id = inputs[index].interaction_id.clone();
+    }
+    Ok(())
 }
 
 fn pending(connection: &Connection, limit: u32) -> Result<Vec<InputInteraction>> {
@@ -271,4 +315,55 @@ fn stable_id(value: &str) -> String {
 
 fn serialization(error: serde_json::Error) -> CrmError {
     CrmError::Serialization(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn input(id: &str) -> InputInteraction {
+        InputInteraction {
+            interaction_id: id.into(),
+            channel: "whatsapp".into(),
+            occurred_at: "2026-01-01 00:00:00".into(),
+            direction: None,
+            subject: None,
+            body: "hello".into(),
+        }
+    }
+
+    fn output(id: &str) -> OutputItem {
+        OutputItem {
+            interaction_id: id.into(),
+            summary: "hello".into(),
+            is_personal: true,
+            mentions: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn restores_short_model_ids_to_exact_interaction_ids() {
+        let inputs = vec![input("long-uuid-one"), input("long-uuid-two")];
+        let model = model_input(&inputs);
+        assert_eq!(model.interactions[0].interaction_id, "item-0");
+        assert_eq!(model.interactions[1].interaction_id, "item-1");
+
+        let mut result = AnalysisOutput {
+            items: vec![output("item-1"), output("item-0")],
+        };
+        restore_interaction_ids(&inputs, &mut result).unwrap();
+
+        assert_eq!(result.items[0].interaction_id, "long-uuid-two");
+        assert_eq!(result.items[1].interaction_id, "long-uuid-one");
+    }
+
+    #[test]
+    fn rejects_duplicate_short_model_ids() {
+        let inputs = vec![input("one"), input("two")];
+        let mut result = AnalysisOutput {
+            items: vec![output("item-0"), output("item-0")],
+        };
+
+        assert!(restore_interaction_ids(&inputs, &mut result).is_err());
+    }
 }

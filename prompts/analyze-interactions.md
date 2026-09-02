@@ -10,4 +10,4 @@ For each input record:
 - If the record explicitly indicates how a mentioned person relates to a participant, provide a short lowercase relationship type such as `friend`, `coworker`, `sibling`, `parent`, `partner`, or `unclear`. Otherwise use `unclear`.
 - Assign confidence from 0 to 1. Do not invent people or relationships.
 
-Return exactly the requested JSON schema. Return one result for every input `interaction_id`, preserving each identifier exactly.
+Return exactly the requested JSON schema. Return one result for every input `interaction_id`, preserving each short `item-N` identifier exactly.
