@@ -9,6 +9,7 @@ use super::state;
 use crate::error::{CrmError, Result};
 use crate::gmail::Credentials;
 use crate::google_contacts::{Client, Person};
+use crate::progress::ProgressTracker;
 use crate::review;
 
 #[derive(Debug, Serialize)]
@@ -38,18 +39,53 @@ pub fn run(
     accounts: &[String],
     desired: Vec<DesiredContact>,
     apply: bool,
+    progress: &mut ProgressTracker,
 ) -> Result<PublishReport> {
     let mirrors = state::list(connection)?;
     let mut clients = HashMap::new();
     let mut remote = HashMap::new();
     let mut duplicate_managed = HashMap::new();
-    for account in accounts {
+    let stage_total = (accounts.len() * 2 + 2) as u64;
+    for (account_index, account) in accounts.iter().enumerate() {
+        let read_stage = (account_index * 2 + 2) as u64;
+        progress.stage(
+            format!("Reading Google contacts from {account}"),
+            read_stage,
+            stage_total,
+            1,
+            false,
+            "request",
+        );
         let account_credentials = credentials.get(account).ok_or_else(|| {
             CrmError::Contacts(format!("missing OAuth credentials for {account}"))
         })?;
         let client = Client::for_account(account_credentials, account)?;
-        let mut people = client.list()?;
-        enqueue_unmanaged_candidates(connection, account, &people)?;
+        let mut people = client.list(|current, total| {
+            progress.progress(
+                format!("Reading Google contacts from {account}"),
+                current as u64,
+                total as u64,
+                false,
+                "contacts",
+            );
+        })?;
+        progress.finish_stage(
+            format!("Read Google contacts from {account}"),
+            people.len() as u64,
+            people.len() as u64,
+            false,
+            "contacts",
+        );
+        let review_stage = read_stage + 1;
+        progress.stage(
+            format!("Checking unmanaged contacts in {account}"),
+            review_stage,
+            stage_total,
+            people.len() as u64,
+            false,
+            "contacts",
+        );
+        enqueue_unmanaged_candidates_with_progress(connection, account, &people, progress)?;
         duplicate_managed.insert(account.clone(), remove_duplicate_managed(&mut people));
         remote.insert(account.clone(), people);
         clients.insert(account.clone(), client);
@@ -67,9 +103,34 @@ pub fn run(
     let collision_subjects = action_subjects(&actions, ActionKind::Collision);
     review::resolve_absent(connection, "google_delete", &delete_subjects)?;
     review::resolve_absent(connection, "google_collision", &collision_subjects)?;
+    let action_stage = stage_total;
+    let action_message = if apply {
+        "Applying Google contact actions"
+    } else {
+        "Reviewing Google contact actions"
+    };
+    progress.stage(
+        action_message,
+        action_stage,
+        stage_total,
+        actions.len() as u64,
+        false,
+        "actions",
+    );
     if apply {
-        apply_actions(connection, &clients, &actions)?;
+        apply_actions(connection, &clients, &actions, progress)?;
     }
+    progress.finish_stage(
+        if apply {
+            "Applied Google contact actions"
+        } else {
+            "Reviewed Google contact actions"
+        },
+        actions.len() as u64,
+        actions.len() as u64,
+        false,
+        "actions",
+    );
     Ok(report(actions, apply))
 }
 
@@ -77,8 +138,9 @@ fn apply_actions(
     connection: &Connection,
     clients: &HashMap<String, Client>,
     actions: &[PlannedAction],
+    progress: &mut ProgressTracker,
 ) -> Result<()> {
-    for action in actions {
+    for (index, action) in actions.iter().enumerate() {
         let client = clients.get(&action.account).ok_or_else(|| {
             CrmError::Contacts(format!("missing Google client for {}", action.account))
         })?;
@@ -102,6 +164,13 @@ fn apply_actions(
             }
             ActionKind::Collision => enqueue_collision(connection, action)?,
         }
+        progress.progress(
+            "Applying Google contact actions",
+            (index + 1) as u64,
+            actions.len() as u64,
+            false,
+            "actions",
+        );
     }
     Ok(())
 }
@@ -142,13 +211,41 @@ fn enqueue_collision(connection: &Connection, action: &PlannedAction) -> Result<
     Ok(())
 }
 
+#[cfg(test)]
 fn enqueue_unmanaged_candidates(
     connection: &Connection,
     account: &str,
     people: &[Person],
 ) -> Result<()> {
-    for person in people.iter().filter(|person| owner_id(person).is_none()) {
+    let mut progress = ProgressTracker::disabled();
+    enqueue_unmanaged_candidates_with_progress(connection, account, people, &mut progress)
+}
+
+fn enqueue_unmanaged_candidates_with_progress(
+    connection: &Connection,
+    account: &str,
+    people: &[Person],
+    progress: &mut ProgressTracker,
+) -> Result<()> {
+    for (index, person) in people.iter().enumerate() {
+        if owner_id(person).is_some() {
+            progress.progress(
+                format!("Checking unmanaged contacts in {account}"),
+                (index + 1) as u64,
+                people.len() as u64,
+                false,
+                "contacts",
+            );
+            continue;
+        }
         let Some(resource) = person.resource_name.as_deref() else {
+            progress.progress(
+                format!("Checking unmanaged contacts in {account}"),
+                (index + 1) as u64,
+                people.len() as u64,
+                false,
+                "contacts",
+            );
             continue;
         };
         let subject = format!("google:{account}:{resource}");
@@ -158,6 +255,13 @@ fn enqueue_unmanaged_candidates(
                 "contact_candidate",
                 &subject,
             )?;
+            progress.progress(
+                format!("Checking unmanaged contacts in {account}"),
+                (index + 1) as u64,
+                people.len() as u64,
+                false,
+                "contacts",
+            );
             continue;
         }
         let name = person.names.first().map(display_name).unwrap_or_default();
@@ -167,6 +271,13 @@ fn enqueue_unmanaged_candidates(
             .map(|item| item.value.as_str())
             .or_else(|| person.phone_numbers.first().map(|item| item.value.as_str()));
         if name.is_empty() && identity.is_none() {
+            progress.progress(
+                format!("Checking unmanaged contacts in {account}"),
+                (index + 1) as u64,
+                people.len() as u64,
+                false,
+                "contacts",
+            );
             continue;
         }
         let label = crate::contact_label::format(
@@ -188,7 +299,21 @@ fn enqueue_unmanaged_candidates(
                 "organizations": person.organizations,
             }),
         )?;
+        progress.progress(
+            format!("Checking unmanaged contacts in {account}"),
+            (index + 1) as u64,
+            people.len() as u64,
+            false,
+            "contacts",
+        );
     }
+    progress.finish_stage(
+        format!("Checked unmanaged contacts in {account}"),
+        people.len() as u64,
+        people.len() as u64,
+        false,
+        "contacts",
+    );
     Ok(())
 }
 

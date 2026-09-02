@@ -8,6 +8,9 @@ use uuid::Uuid;
 use crate::config::Config;
 use crate::error::{CrmError, Result};
 use crate::ollama::{self, OllamaClient};
+use crate::progress::ProgressTracker;
+
+const BATCH_SIZE: usize = 10;
 
 #[derive(Debug, Serialize)]
 pub struct AnalysisReport {
@@ -52,14 +55,30 @@ struct OutputMention {
     relationship_type: String,
 }
 
-pub fn run(config: &Config, connection: &Connection, limit: u32) -> Result<AnalysisReport> {
+pub fn run(
+    config: &Config,
+    connection: &Connection,
+    limit: u32,
+    progress: &mut ProgressTracker,
+) -> Result<AnalysisReport> {
     if !(1..=100).contains(&limit) {
         return Err(CrmError::InvalidConfig(
             "analysis limit must be between 1 and 100".into(),
         ));
     }
+    progress.stage(
+        "Selecting interactions for analysis",
+        1,
+        2,
+        1,
+        false,
+        "query",
+    );
     let inputs = pending(connection, limit)?;
+    progress.finish_stage("Selected interactions for analysis", 1, 1, false, "query");
     if inputs.is_empty() {
+        progress.stage("Analyzing interactions", 2, 2, 0, false, "interactions");
+        progress.finish_stage("Analyzed interactions", 0, 0, false, "interactions");
         return Ok(AnalysisReport {
             selected: 0,
             analyzed: 0,
@@ -68,15 +87,48 @@ pub fn run(config: &Config, connection: &Connection, limit: u32) -> Result<Analy
         });
     }
     let client = OllamaClient::new(&config.ollama)?;
-    let mut output: AnalysisOutput = client.analyze(&model_input(&inputs))?;
-    restore_interaction_ids(&inputs, &mut output)?;
-    let summaries: Vec<_> = output
-        .items
-        .iter()
-        .map(|item| item.summary.clone())
-        .collect();
-    let embeddings = client.embed(&summaries)?;
-    persist(config, connection, &inputs, output, embeddings)
+    let total = inputs.len() as u64;
+    let batch_count = inputs.len().div_ceil(BATCH_SIZE);
+    let mut report = AnalysisReport {
+        selected: inputs.len(),
+        analyzed: 0,
+        mentions: 0,
+        relationships: 0,
+    };
+    progress.stage("Analyzing interactions", 2, 2, total, false, "interactions");
+    for (batch_index, batch) in inputs.chunks(BATCH_SIZE).enumerate() {
+        progress.progress_now(
+            format!(
+                "Analyzing interactions (batch {} of {batch_count})",
+                batch_index + 1
+            ),
+            report.analyzed as u64,
+            total,
+            false,
+            "interactions",
+        );
+        let mut output: AnalysisOutput = client.analyze(&model_input(batch))?;
+        restore_interaction_ids(batch, &mut output)?;
+        let summaries: Vec<_> = output
+            .items
+            .iter()
+            .map(|item| item.summary.clone())
+            .collect();
+        let embeddings = client.embed(&summaries)?;
+        let batch_report = persist(config, connection, batch, output, embeddings)?;
+        report.analyzed += batch_report.analyzed;
+        report.mentions += batch_report.mentions;
+        report.relationships += batch_report.relationships;
+        progress.progress(
+            "Analyzing interactions",
+            report.analyzed as u64,
+            total,
+            false,
+            "interactions",
+        );
+    }
+    progress.finish_stage("Analyzed interactions", total, total, false, "interactions");
+    Ok(report)
 }
 
 fn model_input(inputs: &[InputInteraction]) -> AnalysisInput {

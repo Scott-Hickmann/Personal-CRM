@@ -3,10 +3,35 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use rusqlite::{Connection, params};
 
 use crate::error::Result;
+use crate::progress::ProgressTracker;
 use crate::review;
 
 pub(crate) fn enqueue(connection: &Connection) -> Result<usize> {
+    let mut progress = ProgressTracker::disabled();
+    enqueue_with_progress(connection, &mut progress)
+}
+
+pub(crate) fn enqueue_with_progress(
+    connection: &Connection,
+    progress: &mut ProgressTracker,
+) -> Result<usize> {
+    const STAGES: u64 = 5;
+    progress.stage(
+        "Resolving obsolete contact suggestions",
+        1,
+        STAGES,
+        1,
+        false,
+        "query",
+    );
     resolve_ineligible(connection)?;
+    progress.finish_stage(
+        "Resolved obsolete contact suggestions",
+        1,
+        1,
+        false,
+        "query",
+    );
     let mut statement = connection.prepare(
         "SELECT lower(trim(ip.identity_value)), COUNT(*), group_concat(DISTINCT i.channel),
                 MAX(NULLIF(trim(ip.display_name), ''))
@@ -27,13 +52,36 @@ pub(crate) fn enqueue(connection: &Connection) -> Result<usize> {
         })?
         .collect::<std::result::Result<_, _>>()?;
     drop(statement);
+    let row_count = rows.len() as u64;
     let mut grouped = BTreeMap::<String, Candidate>::new();
-    for (identity, count, channels, name) in rows {
+    progress.stage(
+        "Grouping unresolved identities",
+        2,
+        STAGES,
+        row_count,
+        false,
+        "identities",
+    );
+    for (index, (identity, count, channels, name)) in rows.into_iter().enumerate() {
         if is_non_person_whatsapp_identity(&identity) {
+            progress.progress(
+                "Grouping unresolved identities",
+                (index + 1) as u64,
+                row_count,
+                false,
+                "identities",
+            );
             continue;
         }
         let normalized = crate::repository::normalize_observed_identity(&identity);
         if normalized.is_empty() {
+            progress.progress(
+                "Grouping unresolved identities",
+                (index + 1) as u64,
+                row_count,
+                false,
+                "identities",
+            );
             continue;
         }
         let channel_set = channels
@@ -55,13 +103,50 @@ pub(crate) fn enqueue(connection: &Connection) -> Result<usize> {
         if entry.name.is_none() {
             entry.name = name;
         }
+        progress.progress(
+            "Grouping unresolved identities",
+            (index + 1) as u64,
+            row_count,
+            false,
+            "identities",
+        );
     }
+    progress.finish_stage(
+        "Grouped unresolved identities",
+        row_count,
+        row_count,
+        false,
+        "identities",
+    );
+    let grouped_count = grouped.len() as u64;
     let mut candidates = Vec::new();
-    for (_, candidate) in grouped {
+    progress.stage(
+        "Comparing identities with iCloud contacts",
+        3,
+        STAGES,
+        grouped_count,
+        false,
+        "identities",
+    );
+    for (index, (_, candidate)) in grouped.into_iter().enumerate() {
         if !identity_belongs_to_icloud_contact(connection, &candidate.identity)? {
             candidates.push(candidate);
         }
+        progress.progress(
+            "Comparing identities with iCloud contacts",
+            (index + 1) as u64,
+            grouped_count,
+            false,
+            "identities",
+        );
     }
+    progress.finish_stage(
+        "Compared identities with iCloud contacts",
+        grouped_count,
+        grouped_count,
+        false,
+        "identities",
+    );
     candidates.sort_by(|left, right| {
         right
             .count
@@ -69,7 +154,16 @@ pub(crate) fn enqueue(connection: &Connection) -> Result<usize> {
             .then(left.identity.cmp(&right.identity))
     });
     let mut active_subjects = HashSet::new();
-    for candidate in &candidates {
+    let candidate_count = candidates.len() as u64;
+    progress.stage(
+        "Writing contact suggestions",
+        4,
+        STAGES,
+        candidate_count,
+        false,
+        "candidates",
+    );
+    for (index, candidate) in candidates.iter().enumerate() {
         let channels = candidate
             .channels
             .iter()
@@ -91,8 +185,31 @@ pub(crate) fn enqueue(connection: &Connection) -> Result<usize> {
             serde_json::json!({"name": candidate.name, "identity": candidate.identity, "interaction_count": candidate.count, "channels": channels, "sources": sources}),
         )?;
         active_subjects.insert(candidate.identity.clone());
+        progress.progress(
+            "Writing contact suggestions",
+            (index + 1) as u64,
+            candidate_count,
+            false,
+            "candidates",
+        );
     }
+    progress.finish_stage(
+        "Wrote contact suggestions",
+        candidate_count,
+        candidate_count,
+        false,
+        "candidates",
+    );
+    progress.stage(
+        "Resolving stale contact suggestions",
+        5,
+        STAGES,
+        1,
+        false,
+        "query",
+    );
     resolve_stale_communication_candidates(connection, &active_subjects)?;
+    progress.finish_stage("Resolved stale contact suggestions", 1, 1, false, "query");
     Ok(candidates.len())
 }
 

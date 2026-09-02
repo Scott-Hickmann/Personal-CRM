@@ -10,6 +10,7 @@ use crate::output::{self, Format};
 use crate::photo_links;
 use crate::photos_library::{self, NamedPhotosPerson, PhotosCatalog};
 use crate::photos_prompt;
+use crate::progress::ProgressTracker;
 
 #[derive(Serialize)]
 struct ReconcileResult {
@@ -127,7 +128,11 @@ fn reconcile(format: Format, config_path: PathBuf, args: PhotosLibraryArgs) -> R
     output::emit(format, "photos.reconcile", &result, table)
 }
 
-pub(crate) fn reconcile_automatic(config_path: &std::path::Path) -> Result<()> {
+pub(crate) fn reconcile_automatic(
+    config_path: &std::path::Path,
+    progress: &mut ProgressTracker,
+) -> Result<()> {
+    progress.stage("Loading named Photos people", 1, 2, 1, false, "query");
     let connection = commands::open_database(config_path)?;
     let library = photos_library::discover_library(None)?;
     let catalog = PhotosCatalog::open(&library)?;
@@ -136,12 +141,29 @@ pub(crate) fn reconcile_automatic(config_path: &std::path::Path) -> Result<()> {
         .iter()
         .map(|person| (person.person_uuid.as_str(), person))
         .collect::<HashMap<_, _>>();
-    for person in photo_links::review_people(&connection, None)? {
-        let Some(link) = &person.link else { continue };
-        if link.state != "person_linked" {
-            continue;
-        }
+    progress.finish_stage("Loaded named Photos people", 1, 1, false, "query");
+    let people = photo_links::review_people(&connection, None)?;
+    let linked: Vec<_> = people
+        .iter()
+        .filter(|person| {
+            person
+                .link
+                .as_ref()
+                .is_some_and(|link| link.state == "person_linked")
+        })
+        .collect();
+    let total = linked.len() as u64;
+    progress.stage("Reconciling Photos people", 2, 2, total, false, "people");
+    for (index, person) in linked.into_iter().enumerate() {
+        let link = person.link.as_ref().unwrap();
         let Some(uuid) = link.photos_person_uuid.as_deref() else {
+            progress.progress(
+                "Reconciling Photos people",
+                (index + 1) as u64,
+                total,
+                false,
+                "people",
+            );
             continue;
         };
         if let Some(current) = current_by_id.get(uuid) {
@@ -157,7 +179,15 @@ pub(crate) fn reconcile_automatic(config_path: &std::path::Path) -> Result<()> {
         } else {
             photo_links::set_review_state(&connection, &person.person_id, "stale")?;
         }
+        progress.progress(
+            "Reconciling Photos people",
+            (index + 1) as u64,
+            total,
+            false,
+            "people",
+        );
     }
+    progress.finish_stage("Reconciled Photos people", total, total, false, "people");
     Ok(())
 }
 

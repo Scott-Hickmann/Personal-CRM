@@ -3,8 +3,15 @@ use std::collections::HashSet;
 
 use super::{SyncReport, add_participant, finish_source, open_source, upsert_interaction};
 use crate::error::{CrmError, Result};
+use crate::progress::ProgressTracker;
 
-pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncReport> {
+pub fn sync(
+    config: &crate::config::Config,
+    crm: &Connection,
+    progress: &mut ProgressTracker,
+    stage_current: u64,
+    stage_total: u64,
+) -> Result<SyncReport> {
     let path = config
         .paths
         .imessage
@@ -22,7 +29,8 @@ pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncRepo
         "SELECT m.guid, COALESCE(c.guid, c.chat_identifier), COALESCE(m.service, 'iMessage'),
                 datetime((m.date / 1000000000) + 978307200, 'unixepoch'), m.is_from_me,
                 m.subject, m.text, h.id, m.cache_has_attachments,
-                CASE WHEN participants.handle_count = 1 THEN NULLIF(c.display_name, '') END
+                CASE WHEN participants.handle_count = 1 THEN NULLIF(c.display_name, '') END,
+                COUNT(*) OVER()
          FROM message m
          LEFT JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
          LEFT JOIN chat c ON c.ROWID = cmj.chat_id
@@ -34,7 +42,18 @@ pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncRepo
     )?;
     let mut imported = HashSet::new();
     let mut rows = statement.query([])?;
+    let mut processed = 0_u64;
+    let mut total = 0_u64;
+    progress.stage(
+        "Reading iMessage conversations",
+        stage_current,
+        stage_total,
+        1,
+        false,
+        "query",
+    );
     while let Some(row) = rows.next()? {
+        total = u64::try_from(row.get::<_, i64>(10)?).unwrap_or_default();
         let native_id: String = row.get(0)?;
         imported.insert(native_id.clone());
         let from_me = row.get::<_, i64>(4)? != 0;
@@ -62,8 +81,25 @@ pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncRepo
                 if from_me { "recipient" } else { "sender" },
             )?;
         }
+        processed += 1;
+        progress.progress(
+            "Reading iMessage conversations",
+            processed,
+            total,
+            false,
+            "messages",
+        );
     }
+    progress.finish_stage(
+        "Read iMessage conversations",
+        processed,
+        total,
+        false,
+        "messages",
+    );
+    progress.progress_now("Finalizing iMessage sync", 0, 1, false, "step");
     let deleted = finish_source(crm, "imessage", &run_at)?;
+    progress.finish_stage("Finalized iMessage sync", 1, 1, false, "step");
     Ok(SyncReport {
         source: "imessage".into(),
         imported: imported.len(),

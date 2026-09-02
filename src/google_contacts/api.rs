@@ -53,9 +53,10 @@ impl Client {
         })
     }
 
-    pub fn list(&self) -> Result<Vec<Person>> {
+    pub fn list(&self, mut progress: impl FnMut(usize, usize)) -> Result<Vec<Person>> {
         let mut people = Vec::new();
         let mut page_token: Option<String> = None;
+        let mut total_items = 0;
         loop {
             let mut url = Url::parse(&format!("{}/people/me/connections", self.root))
                 .map_err(|error| CrmError::Network(error.to_string()))?;
@@ -67,7 +68,9 @@ impl Client {
                 url.query_pairs_mut().append_pair("pageToken", token);
             }
             let page: Connections = self.send(self.http.get(url))?;
+            total_items = total_items.max(page.total_items);
             people.extend(page.connections);
+            progress(people.len(), total_items.max(people.len()));
             if page.next_page_token.is_none() {
                 break;
             }
@@ -208,6 +211,8 @@ struct Connections {
     #[serde(default)]
     connections: Vec<Person>,
     next_page_token: Option<String>,
+    #[serde(default)]
+    total_items: usize,
 }
 
 #[derive(Deserialize)]
@@ -232,4 +237,19 @@ fn ensure_success(response: reqwest::blocking::Response) -> Result<reqwest::bloc
 
 fn keyring_error(error: keyring::Error) -> CrmError {
     CrmError::Authentication(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_exact_connection_total() {
+        let page: Connections = serde_json::from_str(
+            r#"{"connections":[{"resourceName":"people/1"}],"totalItems":621}"#,
+        )
+        .unwrap();
+        assert_eq!(page.connections.len(), 1);
+        assert_eq!(page.total_items, 621);
+    }
 }

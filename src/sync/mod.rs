@@ -53,22 +53,22 @@ pub(crate) fn run_with_progress(
     let mut reports = Vec::new();
     if matches!(target, SyncTarget::Contacts) {
         let transaction = crm.unchecked_transaction()?;
-        reports.push(contacts::sync(config, &transaction)?);
+        reports.push(contacts::sync(config, &transaction, progress)?);
         transaction.commit()?;
     }
     if matches!(target, SyncTarget::Imessage) {
         let transaction = crm.unchecked_transaction()?;
-        reports.push(imessage::sync(config, &transaction)?);
+        reports.push(imessage::sync(config, &transaction, progress, 1, 4)?);
         transaction.commit()?;
     }
     if matches!(target, SyncTarget::Whatsapp) {
         let transaction = crm.unchecked_transaction()?;
-        reports.push(whatsapp::sync(config, &transaction)?);
+        reports.push(whatsapp::sync(config, &transaction, progress, 2, 4)?);
         transaction.commit()?;
     }
     if matches!(target, SyncTarget::Calls) {
         let transaction = crm.unchecked_transaction()?;
-        reports.extend(calls::sync(config, &transaction)?);
+        reports.extend(calls::sync(config, &transaction, progress, 3, 4)?);
         transaction.commit()?;
     }
     if matches!(target, SyncTarget::Gmail) && !config.gmail.accounts.is_empty() {

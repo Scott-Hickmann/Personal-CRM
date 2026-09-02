@@ -4,8 +4,15 @@ use std::collections::HashSet;
 use super::whatsapp_identity::LidResolver;
 use super::{SyncReport, finish_source, open_source, replace_participant, upsert_interaction};
 use crate::error::{CrmError, Result};
+use crate::progress::ProgressTracker;
 
-pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncReport> {
+pub fn sync(
+    config: &crate::config::Config,
+    crm: &Connection,
+    progress: &mut ProgressTracker,
+    stage_current: u64,
+    stage_total: u64,
+) -> Result<SyncReport> {
     let path = config
         .paths
         .whatsapp
@@ -28,7 +35,7 @@ pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncRepo
     let mut statement = source.connection().prepare(
         "SELECT m.Z_PK, m.ZSTANZAID, s.ZCONTACTJID, datetime(m.ZMESSAGEDATE + 978307200, 'unixepoch'),
                 m.ZISFROMME, m.ZTEXT, m.ZFROMJID, m.ZTOJID, m.ZMESSAGETYPE,
-                profile.ZPUSHNAME, m.ZPUSHNAME, s.ZPARTNERNAME
+                profile.ZPUSHNAME, m.ZPUSHNAME, s.ZPARTNERNAME, COUNT(*) OVER()
          FROM ZWAMESSAGE m JOIN ZWACHATSESSION s ON s.Z_PK = m.ZCHATSESSION
          LEFT JOIN ZWAPROFILEPUSHNAME profile
            ON profile.ZJID = CASE WHEN m.ZISFROMME = 1 THEN m.ZTOJID ELSE m.ZFROMJID END
@@ -36,7 +43,18 @@ pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncRepo
     )?;
     let mut imported = HashSet::new();
     let mut rows = statement.query([])?;
+    let mut processed = 0_u64;
+    let mut total = 0_u64;
+    progress.stage(
+        "Reading WhatsApp conversations",
+        stage_current,
+        stage_total,
+        1,
+        false,
+        "query",
+    );
     while let Some(row) = rows.next()? {
+        total = u64::try_from(row.get::<_, i64>(12)?).unwrap_or_default();
         let pk: i64 = row.get(0)?;
         let native_id = row
             .get::<_, Option<String>>(1)?
@@ -76,8 +94,25 @@ pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncRepo
                 if from_me { "recipient" } else { "sender" },
             )?;
         }
+        processed += 1;
+        progress.progress(
+            "Reading WhatsApp conversations",
+            processed,
+            total,
+            false,
+            "messages",
+        );
     }
+    progress.finish_stage(
+        "Read WhatsApp conversations",
+        processed,
+        total,
+        false,
+        "messages",
+    );
+    progress.progress_now("Finalizing WhatsApp sync", 0, 1, false, "step");
     let deleted = finish_source(crm, "whatsapp", &run_at)?;
+    progress.finish_stage("Finalized WhatsApp sync", 1, 1, false, "step");
     Ok(SyncReport {
         source: "whatsapp".into(),
         imported: imported.len(),

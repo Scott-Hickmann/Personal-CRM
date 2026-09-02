@@ -2,6 +2,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
 use crate::error::Result;
+use crate::progress::ProgressTracker;
 
 #[derive(Debug, Serialize)]
 pub struct ScoreExplanation {
@@ -25,7 +26,7 @@ pub struct Components {
     pub days_since_last: Option<f64>,
 }
 
-pub fn recalculate_all(connection: &Connection) -> Result<usize> {
+pub fn recalculate_all(connection: &Connection, progress: &mut ProgressTracker) -> Result<usize> {
     let mut statement = connection.prepare(
         "SELECT id FROM people p WHERE p.lifecycle_state='active' AND NOT EXISTS
          (SELECT 1 FROM identities i WHERE i.person_id=p.id AND i.is_self=1)",
@@ -34,11 +35,34 @@ pub fn recalculate_all(connection: &Connection) -> Result<usize> {
         .query_map([], |row| row.get(0))?
         .collect::<std::result::Result<_, _>>()?;
     drop(statement);
+    let total = ids.len() as u64;
+    progress.stage(
+        "Recalculating relationship scores",
+        1,
+        1,
+        total,
+        false,
+        "people",
+    );
     let transaction = connection.unchecked_transaction()?;
-    for id in &ids {
+    for (index, id) in ids.iter().enumerate() {
         calculate_one(&transaction, id)?;
+        progress.progress(
+            "Recalculating relationship scores",
+            (index + 1) as u64,
+            total,
+            false,
+            "people",
+        );
     }
     transaction.commit()?;
+    progress.finish_stage(
+        "Recalculated relationship scores",
+        total,
+        total,
+        false,
+        "people",
+    );
     Ok(ids.len())
 }
 

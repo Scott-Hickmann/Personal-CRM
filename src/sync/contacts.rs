@@ -6,9 +6,15 @@ use uuid::Uuid;
 use super::{SyncReport, rebind_unresolved_participants};
 use crate::contact_publish::apple::{self, AppleContact};
 use crate::error::{CrmError, Result};
+use crate::progress::ProgressTracker;
 use crate::{repository, review};
 
-pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncReport> {
+pub fn sync(
+    config: &crate::config::Config,
+    crm: &Connection,
+    progress: &mut ProgressTracker,
+) -> Result<SyncReport> {
+    const STAGES: u64 = 5;
     let configured = config
         .paths
         .contacts
@@ -30,8 +36,25 @@ pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncRepo
             "the authoritative contact container is not an iCloud account".into(),
         ));
     }
+    progress.stage(
+        "Loading the iCloud contact snapshot",
+        1,
+        STAGES,
+        1,
+        false,
+        "query",
+    );
     let (contacts, companies) = partition_contacts(apple::contacts(configured, container)?);
-    refresh_company_exclusions(crm, &companies)?;
+    progress.finish_stage("Loaded the iCloud contact snapshot", 1, 1, false, "query");
+    progress.stage(
+        "Excluding iCloud company contacts",
+        2,
+        STAGES,
+        companies.len() as u64,
+        false,
+        "companies",
+    );
+    refresh_company_exclusions_with_progress(crm, &companies, progress)?;
     let fingerprint = apple::schema_fingerprint(configured, container)?;
     let conflicts = duplicate_identities(&contacts);
     let mut active_collisions = HashSet::new();
@@ -39,7 +62,15 @@ pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncRepo
 
     let seen: HashSet<_> = contacts.iter().map(|contact| contact.id.as_str()).collect();
     let mut imported = 0;
-    for contact in &contacts {
+    progress.stage(
+        "Reconciling iCloud contacts",
+        3,
+        STAGES,
+        contacts.len() as u64,
+        false,
+        "contacts",
+    );
+    for (index, contact) in contacts.iter().enumerate() {
         if reconcile_contact(
             crm,
             contact,
@@ -49,12 +80,30 @@ pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncRepo
         )? {
             imported += 1;
         }
+        progress.progress(
+            "Reconciling iCloud contacts",
+            (index + 1) as u64,
+            contacts.len() as u64,
+            false,
+            "contacts",
+        );
     }
+    progress.finish_stage(
+        "Reconciled iCloud contacts",
+        contacts.len() as u64,
+        contacts.len() as u64,
+        false,
+        "contacts",
+    );
     review::resolve_absent(crm, "identity_collision", &active_collisions)?;
-    retire_missing(crm, &seen)?;
+    retire_missing_with_progress(crm, &seen, progress, 4, STAGES)?;
+    progress.stage("Finalizing contact links", 5, STAGES, 4, false, "steps");
     enqueue_migration_reviews(crm, &contacts)?;
+    progress.progress("Finalizing contact links", 1, 4, false, "steps");
     rebind_unresolved_participants(crm)?;
+    progress.progress("Finalizing contact links", 2, 4, false, "steps");
     review::enqueue_unresolved_candidates(crm)?;
+    progress.progress("Finalizing contact links", 3, 4, false, "steps");
     crm.execute(
         "INSERT INTO sources(id, kind, account, schema_fingerprint, status, last_sync_at, last_reconcile_at)
          VALUES ('contacts', 'contacts', ?1, ?2, 'ok', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
@@ -63,6 +112,7 @@ pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<SyncRepo
          last_sync_at=CURRENT_TIMESTAMP, last_reconcile_at=CURRENT_TIMESTAMP",
         params![container, fingerprint],
     )?;
+    progress.finish_stage("Finalized contact links", 4, 4, false, "steps");
     Ok(SyncReport {
         source: "contacts".into(),
         imported,
@@ -160,7 +210,13 @@ fn migration_candidate(crm: &Connection, contact: &AppleContact) -> Result<Optio
     Ok((candidates.len() == 1).then(|| candidates.into_iter().next().unwrap()))
 }
 
-fn retire_missing(crm: &Connection, seen: &HashSet<&str>) -> Result<()> {
+fn retire_missing_with_progress(
+    crm: &Connection,
+    seen: &HashSet<&str>,
+    progress: &mut ProgressTracker,
+    stage_current: u64,
+    stage_total: u64,
+) -> Result<()> {
     let mut statement = crm.prepare(
         "SELECT id, apple_contact_id FROM people
          WHERE lifecycle_state='active' AND apple_contact_id IS NOT NULL",
@@ -169,8 +225,24 @@ fn retire_missing(crm: &Connection, seen: &HashSet<&str>) -> Result<()> {
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<std::result::Result<_, _>>()?;
     drop(statement);
-    for (person_id, apple_id) in rows {
+    let total = rows.len() as u64;
+    progress.stage(
+        "Checking for removed iCloud contacts",
+        stage_current,
+        stage_total,
+        total,
+        false,
+        "contacts",
+    );
+    for (index, (person_id, apple_id)) in rows.into_iter().enumerate() {
         if seen.contains(apple_id.as_str()) {
+            progress.progress(
+                "Checking for removed iCloud contacts",
+                (index + 1) as u64,
+                total,
+                false,
+                "contacts",
+            );
             continue;
         }
         crm.execute(
@@ -182,8 +254,28 @@ fn retire_missing(crm: &Connection, seen: &HashSet<&str>) -> Result<()> {
             "UPDATE identities SET active=0 WHERE person_id=?1",
             [&person_id],
         )?;
+        progress.progress(
+            "Checking for removed iCloud contacts",
+            (index + 1) as u64,
+            total,
+            false,
+            "contacts",
+        );
     }
+    progress.finish_stage(
+        "Checked for removed iCloud contacts",
+        total,
+        total,
+        false,
+        "contacts",
+    );
     Ok(())
+}
+
+#[cfg(test)]
+fn retire_missing(crm: &Connection, seen: &HashSet<&str>) -> Result<()> {
+    let mut progress = ProgressTracker::disabled();
+    retire_missing_with_progress(crm, seen, &mut progress, 1, 1)
 }
 
 fn enqueue_migration_reviews(crm: &Connection, contacts: &[AppleContact]) -> Result<()> {
@@ -249,9 +341,13 @@ fn partition_contacts(contacts: Vec<AppleContact>) -> (Vec<AppleContact>, Vec<Ap
         .partition(|contact| !contact.is_company)
 }
 
-fn refresh_company_exclusions(crm: &Connection, companies: &[AppleContact]) -> Result<()> {
+fn refresh_company_exclusions_with_progress(
+    crm: &Connection,
+    companies: &[AppleContact],
+    progress: &mut ProgressTracker,
+) -> Result<()> {
     crm.execute("DELETE FROM excluded_icloud_identities", [])?;
-    for contact in companies {
+    for (index, contact) in companies.iter().enumerate() {
         for (kind, value) in contact_identities(contact) {
             crm.execute(
                 "INSERT OR IGNORE INTO excluded_icloud_identities(
@@ -264,8 +360,28 @@ fn refresh_company_exclusions(crm: &Connection, companies: &[AppleContact]) -> R
                 ],
             )?;
         }
+        progress.progress(
+            "Excluding iCloud company contacts",
+            (index + 1) as u64,
+            companies.len() as u64,
+            false,
+            "companies",
+        );
     }
+    progress.finish_stage(
+        "Excluded iCloud company contacts",
+        companies.len() as u64,
+        companies.len() as u64,
+        false,
+        "companies",
+    );
     Ok(())
+}
+
+#[cfg(test)]
+fn refresh_company_exclusions(crm: &Connection, companies: &[AppleContact]) -> Result<()> {
+    let mut progress = ProgressTracker::disabled();
+    refresh_company_exclusions_with_progress(crm, companies, &mut progress)
 }
 
 fn duplicate_identities(contacts: &[AppleContact]) -> HashMap<String, Vec<String>> {

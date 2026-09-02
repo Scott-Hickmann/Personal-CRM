@@ -97,9 +97,12 @@ Published Google contacts carry a private ownership marker. The daemon automatic
 ```sh
 crm start
 crm status
+crm status --live
 crm review
 crm stop
 ```
+
+`crm status --live` shows the active job, its current stage, and exact `x/n` progress for contacts, messages, interactions, people, actions, and candidates. Gmail full-sync totals are API estimates and are marked with `~`; all other displayed totals are exact.
 
 ## Local web companion
 

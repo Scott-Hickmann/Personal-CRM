@@ -9,6 +9,12 @@ use serde::{Deserialize, Serialize};
 const EVENT_LIMIT: usize = 20;
 const WRITE_INTERVAL: Duration = Duration::from_millis(250);
 
+#[derive(Clone, Copy)]
+pub(crate) struct ProgressStage {
+    pub current: u64,
+    pub total: u64,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct ProgressEvent {
     pub at: String,
@@ -21,8 +27,14 @@ pub(crate) struct ProgressSnapshot {
     pub job_kind: Option<String>,
     pub state: String,
     pub message: String,
-    pub current: Option<u64>,
-    pub total: Option<u64>,
+    #[serde(default)]
+    pub stage_current: u64,
+    #[serde(default)]
+    pub stage_total: u64,
+    #[serde(default)]
+    pub current: u64,
+    #[serde(default)]
+    pub total: u64,
     pub total_is_estimate: bool,
     pub unit: Option<String>,
     pub updated_at: String,
@@ -54,8 +66,10 @@ impl ProgressTracker {
         snapshot.job_kind = Some(job_kind.to_owned());
         snapshot.state = "running".into();
         snapshot.message = format!("Starting {job_kind}");
-        snapshot.current = None;
-        snapshot.total = None;
+        snapshot.stage_current = 1;
+        snapshot.stage_total = 1;
+        snapshot.current = 0;
+        snapshot.total = 1;
         snapshot.total_is_estimate = false;
         snapshot.unit = None;
         append_event(&mut snapshot, format!("Started {job_kind}"));
@@ -69,13 +83,24 @@ impl ProgressTracker {
         tracker
     }
 
-    pub(crate) fn phase(&mut self, message: impl Into<String>) {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn stage(
+        &mut self,
+        message: impl Into<String>,
+        stage_current: u64,
+        stage_total: u64,
+        total: u64,
+        total_is_estimate: bool,
+        unit: &str,
+    ) {
         let message = message.into();
         self.snapshot.message.clone_from(&message);
-        self.snapshot.current = None;
-        self.snapshot.total = None;
-        self.snapshot.total_is_estimate = false;
-        self.snapshot.unit = None;
+        self.snapshot.stage_current = stage_current;
+        self.snapshot.stage_total = stage_total;
+        self.snapshot.current = 0;
+        self.snapshot.total = total;
+        self.snapshot.total_is_estimate = total_is_estimate;
+        self.snapshot.unit = Some(unit.into());
         append_event(&mut self.snapshot, message);
         self.write(true);
     }
@@ -84,16 +109,46 @@ impl ProgressTracker {
         &mut self,
         message: impl Into<String>,
         current: u64,
-        total: Option<u64>,
+        total: u64,
         total_is_estimate: bool,
         unit: &str,
     ) {
         self.snapshot.message = message.into();
-        self.snapshot.current = Some(current);
+        self.snapshot.current = current;
         self.snapshot.total = total;
         self.snapshot.total_is_estimate = total_is_estimate;
         self.snapshot.unit = Some(unit.into());
         self.write(false);
+    }
+
+    pub(crate) fn finish_stage(
+        &mut self,
+        message: impl Into<String>,
+        current: u64,
+        total: u64,
+        total_is_estimate: bool,
+        unit: &str,
+    ) {
+        let message = message.into();
+        self.progress_now(&message, current, total, total_is_estimate, unit);
+        append_event(&mut self.snapshot, message);
+        self.write(true);
+    }
+
+    pub(crate) fn progress_now(
+        &mut self,
+        message: impl Into<String>,
+        current: u64,
+        total: u64,
+        total_is_estimate: bool,
+        unit: &str,
+    ) {
+        self.snapshot.message = message.into();
+        self.snapshot.current = current;
+        self.snapshot.total = total;
+        self.snapshot.total_is_estimate = total_is_estimate;
+        self.snapshot.unit = Some(unit.into());
+        self.write(true);
     }
 
     pub(crate) fn event(&mut self, message: impl Into<String>) {
@@ -107,8 +162,10 @@ impl ProgressTracker {
         self.snapshot.job_kind = None;
         self.snapshot.state = "idle".into();
         self.snapshot.message = "Waiting for work".into();
-        self.snapshot.current = None;
-        self.snapshot.total = None;
+        self.snapshot.stage_current = 0;
+        self.snapshot.stage_total = 0;
+        self.snapshot.current = 0;
+        self.snapshot.total = 0;
         self.snapshot.total_is_estimate = false;
         self.snapshot.unit = None;
         self.write(true);
@@ -135,6 +192,32 @@ impl ProgressTracker {
 
 pub(crate) fn read(config_path: &Path) -> Option<ProgressSnapshot> {
     read_path(&progress_path(config_path))
+}
+
+pub(crate) fn record_interrupted(config_path: &Path, count: usize) {
+    if count == 0 {
+        return;
+    }
+    let path = progress_path(config_path);
+    let mut snapshot = read_path(&path).unwrap_or_default();
+    append_event(
+        &mut snapshot,
+        format!("Recovered {count} interrupted job(s) for retry"),
+    );
+    snapshot.job_id = None;
+    snapshot.job_kind = None;
+    snapshot.state = "idle".into();
+    snapshot.message = "Waiting for work".into();
+    snapshot.stage_current = 0;
+    snapshot.stage_total = 0;
+    snapshot.current = 0;
+    snapshot.total = 0;
+    snapshot.total_is_estimate = false;
+    snapshot.unit = None;
+    snapshot.updated_at = Utc::now().to_rfc3339();
+    if let Err(error) = write_path(&path, &snapshot) {
+        eprintln!("CRM progress telemetry error: {error}");
+    }
 }
 
 fn progress_path(config_path: &Path) -> PathBuf {
@@ -177,10 +260,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let config_path = directory.path().join("config.toml");
         let mut tracker = ProgressTracker::start(&config_path, 42, "gmail");
+        tracker.stage("Reading inbox", 1, 2, 100, false, "emails");
         tracker.progress(
             "Reading emails from inbox@example.com",
             10,
-            Some(100),
+            100,
             true,
             "emails",
         );
@@ -190,8 +274,10 @@ mod tests {
 
         let snapshot = read(&config_path).unwrap();
         assert_eq!(snapshot.job_id, Some(42));
-        assert_eq!(snapshot.current, Some(10));
-        assert_eq!(snapshot.total, Some(100));
+        assert_eq!(snapshot.stage_current, 1);
+        assert_eq!(snapshot.stage_total, 2);
+        assert_eq!(snapshot.current, 10);
+        assert_eq!(snapshot.total, 100);
         assert_eq!(snapshot.events.len(), EVENT_LIMIT);
         assert_eq!(snapshot.events.last().unwrap().message, "Event 24");
 
@@ -199,5 +285,26 @@ mod tests {
         let snapshot = read(&config_path).unwrap();
         assert_eq!(snapshot.state, "idle");
         assert_eq!(snapshot.message, "Waiting for work");
+    }
+
+    #[test]
+    fn records_interrupted_jobs_as_idle_and_retryable() {
+        let directory = tempfile::tempdir().unwrap();
+        let config_path = directory.path().join("config.toml");
+        ProgressTracker::start(&config_path, 7, "communications");
+
+        record_interrupted(&config_path, 1);
+
+        let snapshot = read(&config_path).unwrap();
+        assert_eq!(snapshot.state, "idle");
+        assert_eq!(snapshot.job_id, None);
+        assert!(
+            snapshot
+                .events
+                .last()
+                .unwrap()
+                .message
+                .contains("interrupted")
+        );
     }
 }

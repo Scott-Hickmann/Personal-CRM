@@ -100,13 +100,15 @@ fn configure(format: Format, config_path: PathBuf, args: ContactsConfigureArgs) 
 
 pub(crate) fn publish_automatic(
     config_path: &Path,
+    progress: &mut crate::progress::ProgressTracker,
 ) -> Result<contact_publish::reconcile::PublishReport> {
-    publish_service(config_path, true)
+    publish_service(config_path, true, progress)
 }
 
 fn publish_service(
     config_path: &Path,
     apply: bool,
+    progress: &mut crate::progress::ProgressTracker,
 ) -> Result<contact_publish::reconcile::PublishReport> {
     let config = Config::load(config_path)?;
     let publish = &config.contact_publish;
@@ -135,10 +137,25 @@ fn publish_service(
             })?;
         credentials.insert(account.clone(), Credentials::load(path)?);
     }
+    progress.stage(
+        "Projecting iCloud contacts for Google",
+        1,
+        6,
+        1,
+        false,
+        "snapshot",
+    );
     let desired = contact_publish::project(
         apple::contacts(contacts_path(&config)?, container)?,
         publish,
     )?;
+    progress.finish_stage(
+        "Projected iCloud contacts for Google",
+        1,
+        1,
+        false,
+        "snapshot",
+    );
     let connection = crate::commands::open_database(config_path)?;
     contact_publish::reconcile::run(
         &connection,
@@ -146,6 +163,7 @@ fn publish_service(
         &[personal.clone(), workspace.clone()],
         desired,
         apply,
+        progress,
     )
 }
 

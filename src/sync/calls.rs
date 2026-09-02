@@ -4,12 +4,28 @@ use std::collections::HashSet;
 use super::whatsapp_identity::LidResolver;
 use super::{SyncReport, add_participant, finish_source, open_source, upsert_interaction};
 use crate::error::{CrmError, Result};
+use crate::progress::ProgressTracker;
 
-pub fn sync(config: &crate::config::Config, crm: &Connection) -> Result<Vec<SyncReport>> {
-    Ok(vec![sync_apple(config, crm)?, sync_whatsapp(config, crm)?])
+pub fn sync(
+    config: &crate::config::Config,
+    crm: &Connection,
+    progress: &mut ProgressTracker,
+    stage_current: u64,
+    stage_total: u64,
+) -> Result<Vec<SyncReport>> {
+    Ok(vec![
+        sync_apple(config, crm, progress, stage_current, stage_total)?,
+        sync_whatsapp(config, crm, progress, stage_current + 1, stage_total)?,
+    ])
 }
 
-fn sync_apple(config: &crate::config::Config, crm: &Connection) -> Result<SyncReport> {
+fn sync_apple(
+    config: &crate::config::Config,
+    crm: &Connection,
+    progress: &mut ProgressTracker,
+    stage_current: u64,
+    stage_total: u64,
+) -> Result<SyncReport> {
     let path = config
         .paths
         .apple_calls
@@ -26,12 +42,23 @@ fn sync_apple(config: &crate::config::Config, crm: &Connection) -> Result<SyncRe
     let mut statement = source.connection().prepare(
         "SELECT Z_PK, COALESCE(ZUNIQUE_ID, 'pk:' || Z_PK), datetime(ZDATE + 978307200, 'unixepoch'),
                 ZDURATION, ZADDRESS, ZORIGINATED, ZANSWERED, ZCALLTYPE, ZSERVICE_PROVIDER,
-                ZNAME
+                ZNAME, COUNT(*) OVER()
          FROM ZCALLRECORD WHERE ZDATE IS NOT NULL",
     )?;
     let mut imported = HashSet::new();
     let mut rows = statement.query([])?;
+    let mut processed = 0_u64;
+    let mut total = 0_u64;
+    progress.stage(
+        "Reading Apple call history",
+        stage_current,
+        stage_total,
+        1,
+        false,
+        "query",
+    );
     while let Some(row) = rows.next()? {
+        total = u64::try_from(row.get::<_, i64>(10)?).unwrap_or_default();
         let native_id: String = row.get(1)?;
         imported.insert(native_id.clone());
         let originated = row.get::<_, i64>(5)? != 0;
@@ -60,8 +87,19 @@ fn sync_apple(config: &crate::config::Config, crm: &Connection) -> Result<SyncRe
                 if originated { "recipient" } else { "caller" },
             )?;
         }
+        processed += 1;
+        progress.progress(
+            "Reading Apple call history",
+            processed,
+            total,
+            false,
+            "calls",
+        );
     }
+    progress.finish_stage("Read Apple call history", processed, total, false, "calls");
+    progress.progress_now("Finalizing Apple call sync", 0, 1, false, "step");
     let deleted = finish_source(crm, "apple_calls", &run_at)?;
+    progress.finish_stage("Finalized Apple call sync", 1, 1, false, "step");
     Ok(SyncReport {
         source: "apple_calls".into(),
         imported: imported.len(),
@@ -70,7 +108,13 @@ fn sync_apple(config: &crate::config::Config, crm: &Connection) -> Result<SyncRe
     })
 }
 
-fn sync_whatsapp(config: &crate::config::Config, crm: &Connection) -> Result<SyncReport> {
+fn sync_whatsapp(
+    config: &crate::config::Config,
+    crm: &Connection,
+    progress: &mut ProgressTracker,
+    stage_current: u64,
+    stage_total: u64,
+) -> Result<SyncReport> {
     let chat_path = config
         .paths
         .whatsapp
@@ -91,14 +135,25 @@ fn sync_whatsapp(config: &crate::config::Config, crm: &Connection) -> Result<Syn
     )?;
     let mut statement = source.connection().prepare(
         "SELECT e.Z_PK, COALESCE(e.ZCALLIDSTRING, 'pk:' || e.Z_PK), datetime(e.ZDATE + 978307200, 'unixepoch'),
-                e.ZDURATION, e.ZOUTCOME, p.ZJIDSTRING
+                e.ZDURATION, e.ZOUTCOME, p.ZJIDSTRING, COUNT(*) OVER()
          FROM ZWACDCALLEVENT e LEFT JOIN ZWACDCALLEVENTPARTICIPANT p ON p.Z1PARTICIPANTS = e.Z_PK
          WHERE e.ZDATE IS NOT NULL",
     )?;
     let mut imported = HashSet::new();
     let mut cleared_participants = HashSet::new();
     let mut rows = statement.query([])?;
+    let mut processed = 0_u64;
+    let mut total = 0_u64;
+    progress.stage(
+        "Reading WhatsApp call history",
+        stage_current,
+        stage_total,
+        1,
+        false,
+        "query",
+    );
     while let Some(row) = rows.next()? {
+        total = u64::try_from(row.get::<_, i64>(6)?).unwrap_or_default();
         let native_id: String = row.get(1)?;
         imported.insert(native_id.clone());
         let metadata = serde_json::json!({"duration_seconds": row.get::<_, f64>(3)?, "outcome": row.get::<_, i64>(4)?});
@@ -131,8 +186,25 @@ fn sync_whatsapp(config: &crate::config::Config, crm: &Connection) -> Result<Syn
                 "participant",
             )?;
         }
+        processed += 1;
+        progress.progress(
+            "Reading WhatsApp call history",
+            processed,
+            total,
+            false,
+            "call records",
+        );
     }
+    progress.finish_stage(
+        "Read WhatsApp call history",
+        processed,
+        total,
+        false,
+        "call records",
+    );
+    progress.progress_now("Finalizing WhatsApp call sync", 0, 1, false, "step");
     let deleted = finish_source(crm, "whatsapp_calls", &run_at)?;
+    progress.finish_stage("Finalized WhatsApp call sync", 1, 1, false, "step");
     Ok(SyncReport {
         source: "whatsapp_calls".into(),
         imported: imported.len(),

@@ -73,17 +73,15 @@ fn live(format: Format, config_path: &Path, connection: &Connection) -> Result<(
             "`crm status --live` requires an interactive terminal".into(),
         ));
     }
-    let mut frame = 0;
     loop {
         let status = collect(config_path, connection)?;
         let progress = crate::progress::read(config_path);
-        let screen = live_screen(&status, progress.as_ref(), frame);
+        let screen = live_screen(&status, progress.as_ref());
         print!("\x1b[H\x1b[2J{screen}");
         std::io::stdout().flush().map_err(|source| CrmError::Io {
             path: PathBuf::from("stdout"),
             source,
         })?;
-        frame += 1;
         thread::sleep(Duration::from_millis(500));
     }
 }
@@ -143,7 +141,7 @@ fn summary(status: &Status) -> String {
     )
 }
 
-fn live_screen(status: &Status, progress: Option<&ProgressSnapshot>, frame: usize) -> String {
+fn live_screen(status: &Status, progress: Option<&ProgressSnapshot>) -> String {
     let mut output = format!("CRM live status — Ctrl-C to exit\n\n{}", summary(status));
     output.push_str("\n\nCurrent activity\n");
     if !status.daemon_running {
@@ -151,8 +149,12 @@ fn live_screen(status: &Status, progress: Option<&ProgressSnapshot>, frame: usiz
     } else if let Some(progress) = progress {
         output.push_str(&progress.message);
         if progress.state == "running" {
+            output.push_str(&format!(
+                "\nStage {} / {}",
+                progress.stage_current, progress.stage_total
+            ));
             output.push('\n');
-            output.push_str(&progress_bar(progress, frame));
+            output.push_str(&progress_bar(progress));
         }
     } else {
         output.push_str("Waiting for the daemon's first progress update.");
@@ -170,31 +172,28 @@ fn live_screen(status: &Status, progress: Option<&ProgressSnapshot>, frame: usiz
     output
 }
 
-fn progress_bar(progress: &ProgressSnapshot, frame: usize) -> String {
+fn progress_bar(progress: &ProgressSnapshot) -> String {
     const WIDTH: usize = 36;
-    if let (Some(current), Some(total)) = (progress.current, progress.total) {
-        let total = total.max(current).max(1);
+    let current = progress.current;
+    let total = progress.total.max(current);
+    let (filled, percent) = if total == 0 {
+        (WIDTH, 100)
+    } else {
         let filled = ((current as f64 / total as f64) * WIDTH as f64).round() as usize;
         let percent = (current.saturating_mul(100) / total).min(100);
-        let estimate = if progress.total_is_estimate { "~" } else { "" };
-        let unit = progress.unit.as_deref().unwrap_or("items");
-        return format!(
-            "[{}{}] {} / {}{} {} ({}%)",
-            "█".repeat(filled),
-            "░".repeat(WIDTH - filled),
-            grouped(current),
-            estimate,
-            grouped(total),
-            unit,
-            percent
-        );
-    }
-    let position = frame % (WIDTH - 4);
+        (filled, percent)
+    };
+    let estimate = if progress.total_is_estimate { "~" } else { "" };
+    let unit = progress.unit.as_deref().unwrap_or("items");
     format!(
-        "[{}{}{}] working",
-        "░".repeat(position),
-        "████",
-        "░".repeat(WIDTH - position - 4)
+        "[{}{}] {} / {}{} {} ({}%)",
+        "█".repeat(filled),
+        "░".repeat(WIDTH - filled),
+        grouped(current),
+        estimate,
+        grouped(total),
+        unit,
+        percent
     )
 }
 
@@ -228,14 +227,45 @@ mod tests {
     #[test]
     fn renders_known_progress() {
         let progress = ProgressSnapshot {
-            current: Some(1234),
-            total: Some(5000),
+            current: 1234,
+            total: 5000,
             total_is_estimate: true,
             unit: Some("emails".into()),
             ..ProgressSnapshot::default()
         };
-        let bar = progress_bar(&progress, 0);
+        let bar = progress_bar(&progress);
         assert!(bar.contains("1,234 / ~5,000 emails (24%)"));
+    }
+
+    #[test]
+    fn zero_work_is_complete_without_an_indeterminate_bar() {
+        let progress = ProgressSnapshot {
+            current: 0,
+            total: 0,
+            unit: Some("messages".into()),
+            ..ProgressSnapshot::default()
+        };
+        assert!(progress_bar(&progress).contains("0 / 0 messages (100%)"));
+    }
+
+    #[test]
+    fn live_screen_shows_stage_and_exact_item_progress() {
+        let mut status = initialized("config.toml".into(), "crm.sqlite3".into(), 10);
+        status.daemon_running = true;
+        let progress = ProgressSnapshot {
+            state: "running".into(),
+            message: "Reading WhatsApp conversations".into(),
+            stage_current: 2,
+            stage_total: 4,
+            current: 25,
+            total: 100,
+            unit: Some("messages".into()),
+            ..ProgressSnapshot::default()
+        };
+        let screen = live_screen(&status, Some(&progress));
+        assert!(screen.contains("Stage 2 / 4"));
+        assert!(screen.contains("25 / 100 messages (25%)"));
+        assert!(!screen.contains("working"));
     }
 
     #[test]

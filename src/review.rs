@@ -182,6 +182,13 @@ pub fn enqueue_unresolved_candidates(connection: &Connection) -> Result<usize> {
     crate::review_candidates::enqueue(connection)
 }
 
+pub fn enqueue_unresolved_candidates_with_progress(
+    connection: &Connection,
+    progress: &mut crate::progress::ProgressTracker,
+) -> Result<usize> {
+    crate::review_candidates::enqueue_with_progress(connection, progress)
+}
+
 pub fn pending_migration_count(connection: &Connection) -> Result<usize> {
     let count: i64 = connection.query_row(
         "SELECT COUNT(*) FROM people p WHERE lifecycle_state='migration_pending'
