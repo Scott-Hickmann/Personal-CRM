@@ -56,7 +56,7 @@ fn analyze_interactions(
     ids: &[String],
     progress: &mut ProgressTracker,
 ) -> Result<AnalysisReport> {
-    let analyzer = Analyzer::new(&config.ollama)?;
+    let analyzer = Analyzer::new(&config.mlx)?;
     let total = ids.len() as u64;
     let mut report = AnalysisReport {
         selected: ids.len(),
@@ -66,30 +66,57 @@ fn analyze_interactions(
         relationship_signals: 0,
     };
     progress.stage("Analyzing interactions", 2, 2, total, false, "interactions");
-    for (index, id) in ids.iter().enumerate() {
-        let Some(input) = pending_interaction(connection, id)? else {
+    let mut first_error = None;
+    for (batch_index, ids) in ids.chunks(config.mlx.batch_size).enumerate() {
+        let mut inputs = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(input) = pending_interaction(connection, id)? {
+                inputs.push(input);
+            }
+        }
+        if inputs.is_empty() {
             continue;
-        };
+        }
+        let start = batch_index * config.mlx.batch_size + 1;
+        let end = (start + inputs.len() - 1).min(total as usize);
         progress.progress_now(
-            format!("Analyzing interaction {} of {total}", index + 1),
+            format!("Analyzing interactions {start}-{end} of {total}"),
             report.analyzed as u64,
             total,
             false,
             "interactions",
         );
-        let interaction = std::slice::from_ref(&input);
-        let output = analyzer.analyze(&input)?;
-        let summaries: Vec<_> = output
-            .items
+        let outputs = analyzer.analyze(&inputs)?;
+        let mut ready = Vec::new();
+        for (input, output) in inputs.into_iter().zip(outputs) {
+            match output {
+                Ok(output) => ready.push((input, output)),
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        let summaries: Vec<_> = ready
             .iter()
-            .map(|item| item.summary.clone())
+            .map(|(_, output)| output.items[0].summary.clone())
             .collect();
+        if ready.is_empty() {
+            continue;
+        }
         let embeddings = analyzer.embed(&summaries)?;
-        let interaction_report = persist(config, connection, interaction, output, embeddings)?;
-        report.analyzed += interaction_report.analyzed;
-        report.mentions += interaction_report.mentions;
-        report.relationships += interaction_report.relationships;
-        report.relationship_signals += interaction_report.relationship_signals;
+        for ((input, output), embedding) in ready.into_iter().zip(embeddings) {
+            let interaction_report = persist(
+                config,
+                connection,
+                std::slice::from_ref(&input),
+                output,
+                vec![embedding],
+            )?;
+            report.analyzed += interaction_report.analyzed;
+            report.mentions += interaction_report.mentions;
+            report.relationships += interaction_report.relationships;
+            report.relationship_signals += interaction_report.relationship_signals;
+        }
         progress.progress(
             "Analyzing interactions",
             report.analyzed as u64,
@@ -98,8 +125,14 @@ fn analyze_interactions(
             "interactions",
         );
     }
-    progress.finish_stage("Analyzed interactions", total, total, false, "interactions");
-    Ok(report)
+    progress.finish_stage(
+        "Analyzed interactions",
+        report.analyzed as u64,
+        total,
+        false,
+        "interactions",
+    );
+    first_error.map_or(Ok(report), Err)
 }
 
 fn pending_ids(connection: &Connection) -> Result<Vec<String>> {

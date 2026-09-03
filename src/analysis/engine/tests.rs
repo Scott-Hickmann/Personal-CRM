@@ -1,16 +1,13 @@
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::thread;
-use std::time::Duration;
 
-use serde::Serialize;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::*;
 use crate::analysis::model::InputParticipant;
 
 struct FakeClient {
-    active: AtomicUsize,
-    maximum: AtomicUsize,
+    batches: Mutex<Vec<usize>>,
     repairs: AtomicUsize,
     fail_first_relationship: AtomicBool,
     fail_repair: bool,
@@ -19,23 +16,28 @@ struct FakeClient {
 impl FakeClient {
     fn new(fail_first_relationship: bool, fail_repair: bool) -> Self {
         Self {
-            active: AtomicUsize::new(0),
-            maximum: AtomicUsize::new(0),
+            batches: Mutex::new(Vec::new()),
             repairs: AtomicUsize::new(0),
             fail_first_relationship: AtomicBool::new(fail_first_relationship),
             fail_repair,
         }
     }
 
-    fn response<T: Serialize>(&self, input: &T, allow_failure: bool) -> String {
-        let input = serde_json::to_value(input).unwrap();
+    fn response(&self, messages: &[Message]) -> String {
+        let input: Value = serde_json::from_str(&messages[1].content).unwrap();
+        let repairing = messages.len() == 4;
+        if repairing {
+            self.repairs.fetch_add(1, Ordering::SeqCst);
+            assert!(messages[3].content.contains("required_id"));
+        }
         if let Some(participant) = input.get("participant") {
-            let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
-            self.maximum.fetch_max(active, Ordering::SeqCst);
-            thread::sleep(Duration::from_millis(20));
-            self.active.fetch_sub(1, Ordering::SeqCst);
             let mut participant_id = participant["participant_id"].as_str().unwrap();
-            if allow_failure && self.fail_first_relationship.swap(false, Ordering::SeqCst) {
+            let fail = if repairing {
+                self.fail_repair
+            } else {
+                self.fail_first_relationship.swap(false, Ordering::SeqCst)
+            };
+            if fail {
                 participant_id = "participant-wrong";
             }
             relationship(participant_id)
@@ -52,25 +54,9 @@ impl FakeClient {
 }
 
 impl ModelClient for FakeClient {
-    fn generate<T: Serialize>(&self, _prompt: &str, _schema: &Value, input: &T) -> Result<String> {
-        Ok(self.response(input, true))
-    }
-
-    fn repair<T: Serialize>(
-        &self,
-        _prompt: &str,
-        _schema: &Value,
-        input: &T,
-        _invalid: &str,
-        repair: &str,
-    ) -> Result<String> {
-        self.repairs.fetch_add(1, Ordering::SeqCst);
-        assert!(repair.contains("required_id"));
-        if self.fail_repair {
-            Ok(relationship("participant-wrong"))
-        } else {
-            Ok(self.response(input, false))
-        }
+    fn generate(&self, inputs: &[Vec<Message>]) -> Result<Vec<String>> {
+        self.batches.lock().unwrap().push(inputs.len());
+        Ok(inputs.iter().map(|input| self.response(input)).collect())
     }
 }
 
@@ -89,18 +75,18 @@ fn relationship(participant_id: &str) -> String {
     .to_string()
 }
 
-fn input(participants: usize) -> InputInteraction {
+fn input(index: usize, participants: usize) -> InputInteraction {
     InputInteraction {
-        interaction_id: "database-id".into(),
+        interaction_id: format!("database-id-{index}"),
         channel: "imessage".into(),
         occurred_at: "2026-01-01".into(),
         direction: Some("incoming".into()),
         subject: None,
         body: "hello".into(),
         participants: (0..participants)
-            .map(|index| InputParticipant {
-                participant_id: format!("person-{index}"),
-                display_name: format!("Person {index}"),
+            .map(|participant| InputParticipant {
+                participant_id: format!("person-{index}-{participant}"),
+                display_name: format!("Person {index}-{participant}"),
                 role: "sender".into(),
             })
             .collect(),
@@ -111,11 +97,12 @@ fn input(participants: usize) -> InputInteraction {
 fn repairs_only_the_invalid_relationship_once() {
     let analyzer = Analyzer::from_client(FakeClient::new(true, false)).unwrap();
 
-    let output = analyzer.analyze(&input(1)).unwrap();
+    let mut output = analyzer.analyze(&[input(0, 1)]).unwrap();
+    let output = output.remove(0).unwrap();
 
     assert_eq!(
         output.items[0].relationship_signals[0].participant_id,
-        "person-0"
+        "person-0-0"
     );
     assert_eq!(analyzer.client.repairs.load(Ordering::SeqCst), 1);
 }
@@ -124,18 +111,20 @@ fn repairs_only_the_invalid_relationship_once() {
 fn stops_after_one_failed_repair() {
     let analyzer = Analyzer::from_client(FakeClient::new(true, true)).unwrap();
 
-    let error = analyzer.analyze(&input(1)).unwrap_err();
+    let mut output = analyzer.analyze(&[input(0, 1)]).unwrap();
+    let error = output.remove(0).unwrap_err();
 
     assert!(error.to_string().contains("failed after one repair"));
     assert_eq!(analyzer.client.repairs.load(Ordering::SeqCst), 1);
 }
 
 #[test]
-fn runs_at_most_three_relationship_calls_together() {
+fn batches_content_and_relationships_across_interactions() {
     let analyzer = Analyzer::from_client(FakeClient::new(false, false)).unwrap();
+    let inputs: Vec<_> = (0..8).map(|index| input(index, 2)).collect();
 
-    let output = analyzer.analyze(&input(7)).unwrap();
+    let output = analyzer.analyze(&inputs).unwrap();
 
-    assert_eq!(output.items[0].relationship_signals.len(), 7);
-    assert_eq!(analyzer.client.maximum.load(Ordering::SeqCst), 3);
+    assert!(output.into_iter().all(|item| item.is_ok()));
+    assert_eq!(*analyzer.client.batches.lock().unwrap(), [8, 16]);
 }

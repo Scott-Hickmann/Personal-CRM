@@ -112,13 +112,13 @@ pub(super) fn relationship_input(model: &ModelInteraction, index: usize) -> Valu
 pub(super) fn validate_content(model: &ModelInteraction, output: &ContentOutput) -> Result<()> {
     if output.interaction_id != model.interaction_id {
         return Err(serialization(format!(
-            "Ollama returned content for {} instead of {}",
+            "MLX returned content for {} instead of {}",
             output.interaction_id, model.interaction_id
         )));
     }
     for mention in &output.mentions {
         if !in_range(mention.confidence, 0.0, 1.0) {
-            return Err(serialization("Ollama returned invalid mention confidence"));
+            return Err(serialization("MLX returned invalid mention confidence"));
         }
     }
     Ok(())
@@ -132,7 +132,7 @@ pub(super) fn validate_relationship(
     let expected = &model.participants[index].participant_id;
     if output.participant_id != *expected {
         return Err(serialization(format!(
-            "Ollama returned relationship for {} instead of {expected}",
+            "MLX returned relationship for {} instead of {expected}",
             output.participant_id
         )));
     }
@@ -146,13 +146,13 @@ pub(super) fn validate_relationship(
     ] {
         if !in_range(value, 0.0, 3.0) || value.fract() != 0.0 {
             return Err(serialization(format!(
-                "Ollama returned invalid {name} score for {expected}"
+                "MLX returned invalid {name} score for {expected}"
             )));
         }
     }
     if !in_range(output.confidence, 0.0, 1.0) {
         return Err(serialization(format!(
-            "Ollama returned invalid confidence for {expected}"
+            "MLX returned invalid confidence for {expected}"
         )));
     }
     Ok(())

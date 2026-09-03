@@ -11,7 +11,7 @@ use crate::error::{CrmError, Result};
 pub struct Config {
     pub self_identity: SelfIdentity,
     #[serde(default)]
-    pub ollama: OllamaConfig,
+    pub mlx: MlxConfig,
     #[serde(default)]
     pub gmail: GmailConfig,
     #[serde(default)]
@@ -33,11 +33,12 @@ pub struct SelfIdentity {
     pub whatsapp_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OllamaConfig {
-    pub base_url: String,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MlxConfig {
     pub generation_model: String,
     pub embedding_model: String,
+    pub batch_size: usize,
+    pub max_tokens: usize,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -70,12 +71,13 @@ pub struct SourcePaths {
     pub whatsapp_calls: Option<PathBuf>,
 }
 
-impl Default for OllamaConfig {
+impl Default for MlxConfig {
     fn default() -> Self {
         Self {
-            base_url: "http://127.0.0.1:11434".into(),
-            generation_model: "qwen3.5:9b".into(),
-            embedding_model: "embeddinggemma".into(),
+            generation_model: "mlx-community/gemma-4-E4B-it-qat-4bit".into(),
+            embedding_model: "mlx-community/embeddinggemma-300m-bf16".into(),
+            batch_size: 8,
+            max_tokens: 512,
         }
     }
 }
@@ -94,7 +96,7 @@ impl Config {
                 phones: normalize_strings(phones),
                 whatsapp_ids: Vec::new(),
             },
-            ollama: OllamaConfig::default(),
+            mlx: MlxConfig::default(),
             gmail: GmailConfig::default(),
             contact_publish: ContactPublishConfig::default(),
             paths: SourcePaths::discover()?,
@@ -200,6 +202,10 @@ mod tests {
         assert_eq!(config.self_identity.name, "Scott Hickmann");
         assert_eq!(config.self_identity.emails, ["scott@example.com"]);
         assert_eq!(config.self_identity.phones, ["+1 555 123 4567"]);
-        assert_eq!(config.ollama.generation_model, "qwen3.5:9b");
+        assert_eq!(
+            config.mlx.generation_model,
+            "mlx-community/gemma-4-E4B-it-qat-4bit"
+        );
+        assert_eq!(config.mlx.batch_size, 8);
     }
 }

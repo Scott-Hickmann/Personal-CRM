@@ -21,7 +21,7 @@ mod graph;
 mod history_commands;
 mod job_runner;
 mod jobs;
-mod ollama;
+mod mlx;
 mod output;
 mod person_cleanup;
 mod phone;

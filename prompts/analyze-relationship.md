@@ -24,8 +24,6 @@ Copy the supplied `participant_id`. If no evidence: all six scores `0` and `evid
 
 Exact schema:
 
-```json
 {{json_schema}}
-```
 
-JSON only.
+Return one raw JSON object only. Do not use Markdown or code fences.

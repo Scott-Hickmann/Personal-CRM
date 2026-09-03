@@ -6,7 +6,7 @@ export function ScoreBreakdown({ score }: { score: Score }) {
   const relational = score.components.relational;
   const measures = [
     ["Behavioral evidence", score.behavioral_score],
-    ["Ollama relational evidence", score.relational_score],
+    ["MLX relational evidence", score.relational_score],
     ["Calibrated affinity", score.affinity_score],
   ] as const;
   const dimensions = [

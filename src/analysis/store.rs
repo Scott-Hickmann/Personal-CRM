@@ -8,7 +8,7 @@ use super::AnalysisReport;
 use super::model::{AnalysisOutput, InputInteraction, OutputMention};
 use crate::config::Config;
 use crate::error::{CrmError, Result};
-use crate::ollama;
+use crate::mlx;
 
 pub(super) fn persist(
     config: &Config,
@@ -29,11 +29,18 @@ pub(super) fn persist(
         relationships: 0,
         relationship_signals: 0,
     };
-    let prompt_hash = ollama::prompt_hash()?;
+    if output.items.len() != embeddings.len() {
+        return Err(CrmError::Serialization(format!(
+            "embedding count {} does not match analysis count {}",
+            embeddings.len(),
+            output.items.len()
+        )));
+    }
+    let prompt_hash = mlx::prompt_hash()?;
     for (item, embedding) in output.items.into_iter().zip(embeddings) {
         let input = allowed.get(item.interaction_id.as_str()).ok_or_else(|| {
             CrmError::Serialization(format!(
-                "Ollama returned unknown interaction id {}",
+                "MLX returned unknown interaction id {}",
                 item.interaction_id
             ))
         })?;
@@ -66,7 +73,7 @@ pub(super) fn persist(
                         dimension(signal.conflict_repair),
                         signal.confidence.clamp(0.0, 1.0),
                         signal.evidence.trim().chars().take(500).collect::<String>(),
-                        config.ollama.generation_model,
+                        config.mlx.generation_model,
                         prompt_hash,
                     ],
                 )?;
@@ -80,7 +87,7 @@ pub(super) fn persist(
                 &source_people,
                 &item.interaction_id,
                 &input.occurred_at,
-                &config.ollama.generation_model,
+                &config.mlx.generation_model,
                 mention,
                 &mut report.relationships,
             )?;
@@ -177,7 +184,7 @@ fn persist_summary(
             serde_json::json!([interaction_id]).to_string(),
             summary,
             serde_json::to_string(embedding).map_err(serialization)?,
-            config.ollama.embedding_model,
+            config.mlx.embedding_model,
             prompt_hash
         ],
     )?;
