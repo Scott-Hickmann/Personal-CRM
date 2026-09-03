@@ -8,9 +8,12 @@ IDENTIFIER=com.personal-crm.cli
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 SOURCE="$ROOT/target/release/crm"
 STAGED="$DESTINATION.new.$$"
+SUPPORT="$DESTINATION.support"
+STAGED_SUPPORT="$SUPPORT.new.$$"
 
 cleanup() {
     rm -f -- "$STAGED"
+    rm -rf -- "$STAGED_SUPPORT"
 }
 
 designated_requirement() {
@@ -30,7 +33,17 @@ if ! security find-identity -v -p codesigning 2>/dev/null | grep -F -- "$IDENTIT
     exit 1
 fi
 
+if ! command -v uv >/dev/null 2>&1; then
+    echo "error: uv is required to install the MLX runtime" >&2
+    exit 1
+fi
+
 cargo build --locked --release --manifest-path "$ROOT/Cargo.toml"
+mkdir -p -- "$STAGED_SUPPORT"
+UV_PROJECT_ENVIRONMENT="$STAGED_SUPPORT/venv" uv sync \
+    --project "$ROOT/runtime/mlx" --frozen --no-install-project
+install -m 0644 "$ROOT/runtime/mlx/generation_worker.py" "$STAGED_SUPPORT/generation_worker.py"
+install -m 0644 "$ROOT/runtime/mlx/embedding_worker.py" "$STAGED_SUPPORT/embedding_worker.py"
 mkdir -p -- "$(dirname -- "$DESTINATION")"
 install -m 0755 "$SOURCE" "$STAGED"
 codesign --force --identifier "$IDENTIFIER" --sign "$IDENTITY" --timestamp=none "$STAGED"
@@ -47,6 +60,8 @@ if [ -e "$DESTINATION" ]; then
     fi
 fi
 
+rm -rf -- "$SUPPORT"
+mv -- "$STAGED_SUPPORT" "$SUPPORT"
 mv -f -- "$STAGED" "$DESTINATION"
 trap - EXIT HUP INT TERM
 

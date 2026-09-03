@@ -40,6 +40,6 @@ Use `run contacts`, `run imessage`, `run whatsapp`, `run apple-calls`, `run what
 ## Failure handling
 
 - OAuth setup and `crm start` are interactive setup operations; do not perform them unless requested.
-- Analysis intentionally fails if Ollama is unavailable or either configured model is missing. Do not switch models, download models, or fall back to a remote service.
+- Analysis intentionally fails if its installed MLX runtime is unavailable or either configured model cannot load. Do not switch models or fall back to a remote service.
 - Do not weaken source read-only protections or bypass schema checks.
 - Never send messages or email, modify communication sources, create account credentials, or approve a review implicitly.
