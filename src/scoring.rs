@@ -94,28 +94,8 @@ pub fn recalculate_all(connection: &Connection, progress: &mut ProgressTracker) 
 }
 
 pub fn explain(connection: &Connection, person_id: &str) -> Result<ScoreExplanation> {
-    if connection
-        .query_row(
-            "SELECT 1 FROM metrics WHERE person_id=?1",
-            [person_id],
-            |_| Ok(()),
-        )
-        .optional()?
-        .is_none()
-    {
-        let candidate = calculate_candidate(connection, person_id)?;
-        let calibration = current_calibration(connection)?;
-        let rating = connection
-            .query_row(
-                "SELECT rating FROM affinity_ratings WHERE person_id=?1",
-                [person_id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        persist(connection, &candidate, &calibration, rating)?;
-    }
     let calibration = current_calibration(connection)?;
-    connection
+    let stored = connection
         .query_row(
             "SELECT p.id, p.display_name, p.affinity_score, p.affinity_tier, p.activity_state,
                     m.behavioral_score, m.relational_score, m.components_json, ar.rating
@@ -144,7 +124,33 @@ pub fn explain(connection: &Connection, person_id: &str) -> Result<ScoreExplanat
                 })
             },
         )
-        .map_err(Into::into)
+        .optional()?;
+    if let Some(explanation) = stored {
+        return Ok(explanation);
+    }
+
+    let candidate = calculate_candidate(connection, person_id)?;
+    let (display_name, rating): (String, Option<i64>) = connection.query_row(
+        "SELECT p.display_name, ar.rating FROM people p
+         LEFT JOIN affinity_ratings ar ON ar.person_id=p.id WHERE p.id=?1",
+        [person_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let affinity_score = rating
+        .map(target_score)
+        .unwrap_or_else(|| calibration.apply(candidate.components.base_score));
+    Ok(ScoreExplanation {
+        person_id: candidate.person_id,
+        display_name,
+        affinity_score,
+        affinity_tier: tier(affinity_score).into(),
+        activity_state: activity(candidate.components.days_since_last).into(),
+        behavioral_score: candidate.behavioral_score,
+        relational_score: candidate.relational_score,
+        closeness_rating: rating,
+        calibration,
+        components: candidate.components,
+    })
 }
 
 fn calculate_candidate(connection: &Connection, person_id: &str) -> Result<Candidate> {
@@ -334,21 +340,4 @@ fn activity(days: Option<f64>) -> &'static str {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tiers_and_activity_have_explicit_boundaries() {
-        assert_eq!(tier(80.0), "core");
-        assert_eq!(tier(59.9), "familiar");
-        assert_eq!(tier(0.0), "peripheral");
-        assert_eq!(activity(Some(91.0)), "dormant");
-        assert_eq!(activity(None), "never");
-    }
-
-    #[test]
-    fn model_evidence_gains_weight_as_assessed_coverage_grows() {
-        assert_eq!(base_affinity(60.0, 0.0, 0), 60.0);
-        assert!(base_affinity(60.0, 90.0, 20) > base_affinity(60.0, 90.0, 1));
-    }
-}
+mod tests;
