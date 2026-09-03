@@ -191,7 +191,7 @@ fn content_fingerprint(contacts: &[AppleContact]) -> Result<String> {
 fn source_matches_content_fingerprint(crm: &Connection, fingerprint: &str) -> Result<bool> {
     Ok(crm
         .query_row(
-            "SELECT content_fingerprint=?2 FROM sources WHERE id=?1",
+            "SELECT content_fingerprint IS ?2 FROM sources WHERE id=?1",
             params!["contacts", fingerprint],
             |row| row.get(0),
         )

@@ -17,6 +17,21 @@ fn missing_change_token_requires_a_contact_refresh() {
 }
 
 #[test]
+fn missing_content_fingerprint_requires_a_contact_refresh() {
+    let directory = tempfile::tempdir().unwrap();
+    let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
+    connection
+        .execute(
+            "INSERT INTO sources(id, kind, content_fingerprint, status)
+             VALUES ('contacts', 'contacts', NULL, 'ok')",
+            [],
+        )
+        .unwrap();
+
+    assert!(!source_matches_content_fingerprint(&connection, "fingerprint").unwrap());
+}
+
+#[test]
 fn content_fingerprint_ignores_contact_and_identity_order() {
     let first = sample_contact("apple-1");
     let mut second = sample_contact("apple-2");
