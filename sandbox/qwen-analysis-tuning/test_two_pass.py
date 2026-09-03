@@ -2,6 +2,7 @@ import json
 import time
 import unittest
 
+import mlx_backend
 import two_pass
 
 
@@ -37,6 +38,25 @@ class TwoPassTests(unittest.TestCase):
 
         self.assertIn('{"type":"object","additionalProperties":false}', rendered)
         self.assertNotIn("{{json_schema}}", rendered)
+
+    def test_gemma4_messages_use_model_role_for_repairs(self):
+        rendered = mlx_backend.render_gemma4_messages(
+            [
+                {"role": "system", "content": "rules"},
+                {"role": "user", "content": "record"},
+                {"role": "assistant", "content": "bad output"},
+                {"role": "user", "content": "repair"},
+            ]
+        )
+
+        self.assertEqual(
+            rendered,
+            "<|turn>system\nrules<turn|>\n"
+            "<|turn>user\nrecord<turn|>\n"
+            "<|turn>model\nbad output<turn|>\n"
+            "<|turn>user\nrepair<turn|>\n"
+            "<|turn>model\n",
+        )
 
     def test_parallel_harness_overlaps_calls(self):
         participants = list(range(3))

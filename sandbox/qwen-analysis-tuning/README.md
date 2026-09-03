@@ -58,7 +58,7 @@ memory:
 uv run main.py ollama
 ollama stop qwen3.5:9b
 uv run main.py mlx-lm
-uv run main.py mlx-lm --mlx-model mlx-community/gemma-4-e4b-4bit
+uv run main.py mlx-lm --mlx-model mlx-community/gemma-4-E4B-it-qat-4bit
 ```
 
 The defaults compare Ollama's `qwen3.5:9b` Q4_K_M model with
@@ -70,27 +70,25 @@ time. The final line is machine-readable JSON.
 
 ### Result
 
-Measured September 2, 2026 on an M3 Pro MacBook Pro (12 cores, 18 GB unified
+Measured September 2–3, 2026 on an M3 Pro MacBook Pro (12 cores, 18 GB unified
 memory), using Ollama 0.32.15, MLX-LM 0.31.3, and MLX 0.32.2:
 
 | Backend | Prompt | Generation | Inference | Wall |
 | --- | ---: | ---: | ---: | ---: |
 | Ollama Q4_K_M | 406.5 tok/s | 21.8 tok/s | 11.87s | 11.94s |
 | MLX-LM Qwen 3.5 9B 4-bit | 187.7 tok/s | 27.0 tok/s | 9.71s | 9.95s |
-| MLX-LM Gemma 4 E4B 4-bit | 411.0 tok/s | 39.2 tok/s | 6.63s | 6.86s |
+| MLX-LM Gemma 4 E4B IT QAT 4-bit | 331.0 tok/s | 27.8 tok/s | 9.33s | 9.53s |
 
 MLX-LM was **1.24x faster at generation** and **1.22x faster in model
 inference time**. Its median wall time was 1.20x faster. Ollama processed this
 short 45-token prompt 2.17x faster, though its three prompt measurements were
 more variable. All six measured runs reached the same 256-token limit.
 
-Gemma 4 E4B was 1.45x faster than Qwen 3.5 9B at generation and used
-4.36 GB peak memory instead of 5.27 GB. Its conversion has no chat template,
-so the harness tokenized the benchmark prompt directly: Gemma processed 33
-prompt tokens while Qwen processed 45 templated tokens. Generation used the
-same prompt text and 256-token limit. MLX-LM 0.31.3 also needed the upstream
-shared-KV loader fix mirrored in `main.py`; it only discards projections that
-Gemma's shared-KV layers do not execute.
+The instruction-tuned Gemma checkpoint was 1.03x faster than Qwen 3.5 9B at
+generation and used 5.96 GB peak memory instead of 5.27 GB. Generation used
+the same prompt text and 256-token limit. MLX-LM 0.31.3 also needed the
+upstream shared-KV loader fix mirrored in `main.py`; it only discards
+projections that Gemma's shared-KV layers do not execute.
 
 ## Batched throughput
 
@@ -102,7 +100,7 @@ HTTP requests. Run each model separately:
 uv run batch.py ollama
 ollama stop qwen3.5:9b
 uv run batch.py mlx-lm
-uv run batch.py mlx-lm --mlx-model mlx-community/gemma-4-e4b-4bit
+uv run batch.py mlx-lm --mlx-model mlx-community/gemma-4-E4B-it-qat-4bit
 ```
 
 The same machine and software versions produced these medians over three
@@ -113,13 +111,13 @@ all batch wall-clock overhead:
 | --- | ---: | ---: | ---: | ---: |
 | Ollama Qwen 3.5 9B | 16.1 tok/s | 16.1 tok/s | 16.0 tok/s | 15.8 tok/s |
 | MLX-LM Qwen 3.5 9B | 19.2 tok/s | 35.9 tok/s | 63.5 tok/s | 70.1 tok/s |
-| MLX-LM Gemma 4 E4B | 29.8 tok/s | 58.2 tok/s | 92.6 tok/s | 133.3 tok/s |
+| MLX-LM Gemma 4 E4B IT | 27.0 tok/s | 53.3 tok/s | 100.8 tok/s | 157.5 tok/s |
 
 | Backend/model | Batch 1 wall | Batch 2 wall | Batch 4 wall | Batch 8 wall |
 | --- | ---: | ---: | ---: | ---: |
 | Ollama Qwen 3.5 9B | 7.93s | 15.88s | 32.09s | 64.69s |
 | MLX-LM Qwen 3.5 9B | 6.67s | 7.13s | 8.06s | 14.60s |
-| MLX-LM Gemma 4 E4B | 4.29s | 4.40s | 5.53s | 7.68s |
+| MLX-LM Gemma 4 E4B IT | 4.74s | 4.81s | 5.08s | 6.50s |
 
 MLX-LM Qwen scaled to 3.65x its batch-1 throughput at batch 8. Its advantage
 over Ollama grew from 1.19x at batch 1 to 4.44x at batch 8. Ollama's throughput
@@ -127,8 +125,44 @@ stayed flat and its wall time grew linearly because this Qwen 3.5 runner uses
 one inference slot, so the concurrent requests queue. MLX-LM was close to
 linear through batch 4, then began to saturate.
 
-Gemma scaled to 4.47x its own batch-1 throughput and reached 133.3 tok/s at
-batch 8. The Gemma-to-Qwen numbers compare model choices as well as inference
-speed, so they are not a backend-only comparison. Also, MLX-LM's batch
-scheduler adds overhead at batch 1: use the single-request generator for an
-interactive stream and batching when multiple requests are ready together.
+Gemma scaled to 5.83x its own batch-1 throughput and reached 157.5 tok/s at
+batch 8, 2.25x MLX-LM Qwen's throughput. The Gemma-to-Qwen numbers compare
+model choices and quantization schemes as well as inference speed, so they are
+not a backend-only comparison. Also, MLX-LM's batch scheduler adds overhead at
+batch 1: use the single-request generator for an interactive stream and
+batching when multiple requests are ready together.
+
+## Gemma E4B prompt accuracy
+
+Accuracy uses the instruction-tuned
+`mlx-community/gemma-4-E4B-it-qat-4bit` checkpoint. The similarly named
+`mlx-community/gemma-4-e4b-4bit` checkpoint is a base model and is not suitable
+for instruction-following evaluation.
+
+```sh
+ollama stop qwen3.5:9b
+uv run two_pass.py --backend mlx-lm --trials 1
+```
+
+The fixture suite contains nine single-interaction cases and 25 participant
+records. Each content prompt ran once and each relationship prompt ran twice,
+for 59 validated responses total:
+
+| Check | Gemma E4B IT | Qwen 3.5 9B |
+| --- | ---: | ---: |
+| Content cases passing | 9/9 | 9/9 |
+| Full semantic cases passing | 9/9 | 8/9 |
+| Responses validated | 59/59 | 59/59 |
+| Repair calls | 0 | 0 |
+
+Gemma passed automation detection, prompt-injection resistance, Unicode names,
+mention extraction, exact zero-score cases, and the positive thresholds for
+affection, shared activity, practical support, and conflict repair. Qwen's one
+failure assigned nonzero relationship evidence to one recipient of an
+automated build notification in both repeated scorings.
+
+The first Gemma probe understood the content case but wrapped its JSON in a
+Markdown fence. Removing Markdown fences around the schema examples and
+explicitly requesting raw JSON fixed the protocol mismatch; all subsequent
+responses parsed and validated on their first attempt. This is a small,
+purpose-built regression suite rather than a broad accuracy benchmark.

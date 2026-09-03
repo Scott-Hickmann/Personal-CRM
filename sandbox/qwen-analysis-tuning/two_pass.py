@@ -8,6 +8,7 @@ import time
 import urllib.request
 
 from live_fixture import load_live
+from mlx_backend import MlxCaller
 from validation import SCORES, semantic_errors, validate_content, validate_relationship
 
 ROOT = Path(__file__).resolve().parent
@@ -147,6 +148,7 @@ def benchmark_case(case, assets, args, parallel_first):
         assets["content_repair"],
         args.base_url,
         args.model,
+        args.call_model,
     )
     if args.content_only:
         expected = case["expect"].get("is_personal")
@@ -174,6 +176,7 @@ def benchmark_case(case, assets, args, parallel_first):
             assets["relationship_repair"],
             args.base_url,
             args.model,
+            args.call_model,
         )
 
     participants = interaction["participants"]
@@ -183,9 +186,11 @@ def benchmark_case(case, assets, args, parallel_first):
     serial_output = merge(content, [result[0] for result in serial])
     parallel_output = merge(content, [result[0] for result in parallel])
     errors = semantic_errors(serial_output, case["expect"]) + semantic_errors(parallel_output, case["expect"])
+    relationship_repairs = sum(result[1] - 1 for result in serial + parallel)
     speedup = serial_wall / parallel_wall
     print(
         f"{case['name']}: participants={len(participants)} content_attempts={content_attempts} "
+        f"relationship_repairs={relationship_repairs} "
         f"serial={serial_wall:.2f}s parallel={parallel_wall:.2f}s speedup={speedup:.2f}x "
         f"serial_server={sum(result[2] for result in serial):.2f}s "
         f"parallel_server={sum(result[2] for result in parallel):.2f}s "
@@ -195,21 +200,38 @@ def benchmark_case(case, assets, args, parallel_first):
     )
     for error in errors:
         print(f"  - {error}", flush=True)
-    return serial_wall, parallel_wall, errors
+    responses = 1 + len(serial) + len(parallel)
+    repairs = content_attempts - 1 + relationship_repairs
+    return serial_wall, parallel_wall, errors, responses, repairs
 
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--backend", choices=("ollama", "mlx-lm"), default="ollama")
     parser.add_argument("--case", action="append", help="only cases containing this text")
     parser.add_argument("--trials", type=int, default=1)
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--content-only", action="store_true")
-    parser.add_argument("--model", default="qwen3.5:9b")
+    parser.add_argument("--model")
+    parser.add_argument("--max-tokens", type=int, default=512)
     parser.add_argument("--base-url", default="http://127.0.0.1:11434")
     parser.add_argument("--live-db")
     parser.add_argument("--live-id")
     parser.add_argument("--only-live", action="store_true")
     args = parser.parse_args()
+    if args.model is None:
+        args.model = (
+            "qwen3.5:9b"
+            if args.backend == "ollama"
+            else "mlx-community/gemma-4-E4B-it-qat-4bit"
+        )
+    if args.backend == "mlx-lm":
+        if args.workers != 1:
+            print("MLX-LM uses one worker for deterministic accuracy testing", flush=True)
+            args.workers = 1
+        args.call_model = MlxCaller(args.model, args.max_tokens)
+    else:
+        args.call_model = call_ollama
     if bool(args.live_db) != bool(args.live_id):
         parser.error("--live-db and --live-id must be supplied together")
     cases = load_json(ROOT / "fixtures.json")
@@ -243,9 +265,12 @@ def main():
     serial = sum(result[0] for result in totals)
     parallel = sum(result[1] for result in totals)
     failures = sum(bool(result[2]) for result in totals)
+    responses = sum(result[3] for result in totals)
+    repairs = sum(result[4] for result in totals)
     print(
         f"total: serial={serial:.2f}s parallel={parallel:.2f}s "
-        f"speedup={serial / parallel:.2f}x semantic_failures={failures}",
+        f"speedup={serial / parallel:.2f}x responses={responses} repairs={repairs} "
+        f"semantic_failures={failures}",
         flush=True,
     )
 

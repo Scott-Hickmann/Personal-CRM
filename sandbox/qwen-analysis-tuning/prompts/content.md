@@ -18,8 +18,6 @@ Return:
 
 Exact schema:
 
-```json
 {{json_schema}}
-```
 
-JSON only.
+Return one raw JSON object only. Do not use Markdown or code fences.
