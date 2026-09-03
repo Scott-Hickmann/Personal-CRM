@@ -48,14 +48,49 @@ def respond(value):
     print(json.dumps(value, ensure_ascii=False, separators=(",", ":")), flush=True)
 
 
-def main():
-    if len(sys.argv) != 4:
-        raise SystemExit("usage: generation_worker.py MODEL BATCH_SIZE MAX_TOKENS")
+def prompt_length(prompt):
+    tokens = prompt.get("input_ids") if hasattr(prompt, "get") else prompt
+    shape = getattr(tokens, "shape", None)
+    if shape:
+        return shape[-1]
+    if tokens and isinstance(tokens[0], list):
+        return len(tokens[0])
+    return len(tokens)
 
-    model_name, batch_size, max_tokens = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+
+def prompt_batches(prompts, max_batch_size, max_batch_tokens, max_output_tokens):
+    batch = []
+    longest = 0
+    for prompt in prompts:
+        candidate_longest = max(longest, prompt_length(prompt))
+        padded_tokens = (candidate_longest + max_output_tokens) * (len(batch) + 1)
+        if batch and (
+            len(batch) == max_batch_size or padded_tokens > max_batch_tokens
+        ):
+            yield batch
+            batch = []
+            longest = 0
+        batch.append(prompt)
+        longest = max(longest, prompt_length(prompt))
+    if batch:
+        yield batch
+
+
+def main():
+    if len(sys.argv) != 5:
+        raise SystemExit(
+            "usage: generation_worker.py MODEL BATCH_SIZE MAX_BATCH_TOKENS MAX_TOKENS"
+        )
+
+    model_name = sys.argv[1]
+    batch_size = int(sys.argv[2])
+    max_batch_tokens = int(sys.argv[3])
+    max_tokens = int(sys.argv[4])
     patch_gemma4_loader()
+    import mlx.core as mx
     from mlx_lm import batch_generate, load
 
+    mx.set_cache_limit(512 * 1024 * 1024)
     model, tokenizer = load(model_name)
     tokenizer.eos_token_ids.add(tokenizer.convert_tokens_to_ids("<turn|>"))
 
@@ -64,19 +99,26 @@ def main():
             request = json.loads(line)
             messages = request["inputs"]
             prompts = [tokenize(tokenizer, item) for item in messages]
-            result = batch_generate(
-                model,
-                tokenizer,
-                prompts,
-                max_tokens=max_tokens,
-                completion_batch_size=batch_size,
-                prefill_batch_size=batch_size,
-            )
-            respond({"outputs": result.texts})
+            outputs = []
+            for batch in prompt_batches(
+                prompts, batch_size, max_batch_tokens, max_tokens
+            ):
+                try:
+                    result = batch_generate(
+                        model,
+                        tokenizer,
+                        batch,
+                        max_tokens=max_tokens,
+                        completion_batch_size=len(batch),
+                        prefill_batch_size=len(batch),
+                    )
+                    outputs.extend(result.texts)
+                finally:
+                    mx.clear_cache()
+            respond({"outputs": outputs})
         except Exception as error:
             respond({"error": f"{type(error).__name__}: {error}"})
 
 
 if __name__ == "__main__":
     main()
-

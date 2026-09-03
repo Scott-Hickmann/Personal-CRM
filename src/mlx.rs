@@ -13,7 +13,7 @@ use crate::error::{CrmError, Result};
 
 pub(crate) struct MlxClient {
     generation: Mutex<JsonWorker>,
-    embedding: Mutex<JsonWorker>,
+    embedding: JsonWorker,
 }
 
 struct JsonWorker {
@@ -69,17 +69,18 @@ impl MlxClient {
                         .into(),
                     config.generation_model.clone(),
                     config.batch_size.to_string(),
+                    config.max_batch_tokens.to_string(),
                     config.max_tokens.to_string(),
                 ],
             )),
-            embedding: Mutex::new(JsonWorker::new(
+            embedding: JsonWorker::new(
                 "embedding",
                 support.join("venv/bin/python"),
                 vec![
                     support.join("embedding_worker.py").to_string_lossy().into(),
                     config.embedding_model.clone(),
                 ],
-            )),
+            ),
         })
     }
 
@@ -94,11 +95,7 @@ impl MlxClient {
     }
 
     pub(crate) fn embed(&self, inputs: &[String]) -> Result<Vec<Vec<f64>>> {
-        let outputs: Vec<Vec<f64>> = self
-            .embedding
-            .lock()
-            .unwrap()
-            .call(&WorkerRequest { inputs })?;
+        let outputs: Vec<Vec<f64>> = self.embedding.fresh().call(&WorkerRequest { inputs })?;
         ensure_count("embedding", inputs.len(), outputs.len())?;
         Ok(outputs)
     }
@@ -112,6 +109,10 @@ impl JsonWorker {
             arguments,
             process: None,
         }
+    }
+
+    fn fresh(&self) -> Self {
+        Self::new(self.name, self.executable.clone(), self.arguments.clone())
     }
 
     fn call<I: Serialize, O: DeserializeOwned>(&mut self, request: &I) -> Result<O> {
@@ -247,9 +248,13 @@ fn validate(config: &MlxConfig) -> Result<()> {
             "MLX model names cannot be empty".into(),
         ));
     }
-    if config.batch_size == 0 || config.max_tokens == 0 {
+    if config.batch_size == 0
+        || config.max_batch_tokens == 0
+        || config.embedding_batch_size == 0
+        || config.max_tokens == 0
+    {
         return Err(CrmError::InvalidConfig(
-            "MLX batch_size and max_tokens must be positive".into(),
+            "MLX batch and token limits must be positive".into(),
         ));
     }
     Ok(())

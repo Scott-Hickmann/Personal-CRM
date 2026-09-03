@@ -6,7 +6,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 
 use self::engine::Analyzer;
-use self::model::{InputInteraction, InputParticipant};
+use self::model::{AnalysisOutput, InputInteraction, InputParticipant};
 use self::store::persist;
 use crate::config::Config;
 use crate::error::Result;
@@ -67,6 +67,8 @@ fn analyze_interactions(
     };
     progress.stage("Analyzing interactions", 2, 2, total, false, "interactions");
     let mut first_error = None;
+    let mut processed = 0;
+    let mut ready = Vec::with_capacity(config.mlx.embedding_batch_size);
     for (batch_index, ids) in ids.chunks(config.mlx.batch_size).enumerate() {
         let mut inputs = Vec::with_capacity(ids.len());
         for id in ids {
@@ -81,50 +83,35 @@ fn analyze_interactions(
         let end = (start + inputs.len() - 1).min(total as usize);
         progress.progress_now(
             format!("Analyzing interactions {start}-{end} of {total}"),
-            report.analyzed as u64,
+            processed as u64,
             total,
             false,
             "interactions",
         );
         let outputs = analyzer.analyze(&inputs)?;
-        let mut ready = Vec::new();
         for (input, output) in inputs.into_iter().zip(outputs) {
             match output {
-                Ok(output) => ready.push((input, output)),
+                Ok(output) => {
+                    ready.push((input, output));
+                    if ready.len() == config.mlx.embedding_batch_size {
+                        persist_ready(config, connection, &analyzer, &mut ready, &mut report)?;
+                    }
+                }
                 Err(error) => {
                     first_error.get_or_insert(error);
                 }
             }
         }
-        let summaries: Vec<_> = ready
-            .iter()
-            .map(|(_, output)| output.items[0].summary.clone())
-            .collect();
-        if ready.is_empty() {
-            continue;
-        }
-        let embeddings = analyzer.embed(&summaries)?;
-        for ((input, output), embedding) in ready.into_iter().zip(embeddings) {
-            let interaction_report = persist(
-                config,
-                connection,
-                std::slice::from_ref(&input),
-                output,
-                vec![embedding],
-            )?;
-            report.analyzed += interaction_report.analyzed;
-            report.mentions += interaction_report.mentions;
-            report.relationships += interaction_report.relationships;
-            report.relationship_signals += interaction_report.relationship_signals;
-        }
+        processed += ids.len();
         progress.progress(
             "Analyzing interactions",
-            report.analyzed as u64,
+            processed as u64,
             total,
             false,
             "interactions",
         );
     }
+    persist_ready(config, connection, &analyzer, &mut ready, &mut report)?;
     progress.finish_stage(
         "Analyzed interactions",
         report.analyzed as u64,
@@ -133,6 +120,37 @@ fn analyze_interactions(
         "interactions",
     );
     first_error.map_or(Ok(report), Err)
+}
+
+fn persist_ready(
+    config: &Config,
+    connection: &Connection,
+    analyzer: &Analyzer,
+    ready: &mut Vec<(InputInteraction, AnalysisOutput)>,
+    report: &mut AnalysisReport,
+) -> Result<()> {
+    if ready.is_empty() {
+        return Ok(());
+    }
+    let summaries: Vec<_> = ready
+        .iter()
+        .map(|(_, output)| output.items[0].summary.clone())
+        .collect();
+    let embeddings = analyzer.embed(&summaries)?;
+    for ((input, output), embedding) in ready.drain(..).zip(embeddings) {
+        let interaction_report = persist(
+            config,
+            connection,
+            std::slice::from_ref(&input),
+            output,
+            vec![embedding],
+        )?;
+        report.analyzed += interaction_report.analyzed;
+        report.mentions += interaction_report.mentions;
+        report.relationships += interaction_report.relationships;
+        report.relationship_signals += interaction_report.relationship_signals;
+    }
+    Ok(())
 }
 
 fn pending_ids(connection: &Connection) -> Result<Vec<String>> {

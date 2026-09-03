@@ -14,6 +14,7 @@ def main():
     import mlx.core as mx
     from mlx_embeddings import load
 
+    mx.set_cache_limit(128 * 1024 * 1024)
     model, tokenizer = load(sys.argv[1])
     for line in sys.stdin:
         try:
@@ -28,10 +29,10 @@ def main():
             embeddings = output.text_embeds
             mx.eval(embeddings)
             respond({"outputs": embeddings.tolist()})
+            mx.clear_cache()
         except Exception as error:
             respond({"error": f"{type(error).__name__}: {error}"})
 
 
 if __name__ == "__main__":
     main()
-
