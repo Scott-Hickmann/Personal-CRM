@@ -91,3 +91,44 @@ prompt tokens while Qwen processed 45 templated tokens. Generation used the
 same prompt text and 256-token limit. MLX-LM 0.31.3 also needed the upstream
 shared-KV loader fix mirrored in `main.py`; it only discards projections that
 Gemma's shared-KV layers do not execute.
+
+## Batched throughput
+
+`batch.py` measures aggregate throughput for 1, 2, 4, and 8 simultaneous
+requests. MLX-LM uses its native batch generator; Ollama receives concurrent
+HTTP requests. Run each model separately:
+
+```sh
+uv run batch.py ollama
+ollama stop qwen3.5:9b
+uv run batch.py mlx-lm
+uv run batch.py mlx-lm --mlx-model mlx-community/gemma-4-e4b-4bit
+```
+
+The same machine and software versions produced these medians over three
+trials, with 128 generated tokens per request. Effective throughput includes
+all batch wall-clock overhead:
+
+| Backend/model | Batch 1 | Batch 2 | Batch 4 | Batch 8 |
+| --- | ---: | ---: | ---: | ---: |
+| Ollama Qwen 3.5 9B | 16.1 tok/s | 16.1 tok/s | 16.0 tok/s | 15.8 tok/s |
+| MLX-LM Qwen 3.5 9B | 19.2 tok/s | 35.9 tok/s | 63.5 tok/s | 70.1 tok/s |
+| MLX-LM Gemma 4 E4B | 29.8 tok/s | 58.2 tok/s | 92.6 tok/s | 133.3 tok/s |
+
+| Backend/model | Batch 1 wall | Batch 2 wall | Batch 4 wall | Batch 8 wall |
+| --- | ---: | ---: | ---: | ---: |
+| Ollama Qwen 3.5 9B | 7.93s | 15.88s | 32.09s | 64.69s |
+| MLX-LM Qwen 3.5 9B | 6.67s | 7.13s | 8.06s | 14.60s |
+| MLX-LM Gemma 4 E4B | 4.29s | 4.40s | 5.53s | 7.68s |
+
+MLX-LM Qwen scaled to 3.65x its batch-1 throughput at batch 8. Its advantage
+over Ollama grew from 1.19x at batch 1 to 4.44x at batch 8. Ollama's throughput
+stayed flat and its wall time grew linearly because this Qwen 3.5 runner uses
+one inference slot, so the concurrent requests queue. MLX-LM was close to
+linear through batch 4, then began to saturate.
+
+Gemma scaled to 4.47x its own batch-1 throughput and reached 133.3 tok/s at
+batch 8. The Gemma-to-Qwen numbers compare model choices as well as inference
+speed, so they are not a backend-only comparison. Also, MLX-LM's batch
+scheduler adds overhead at batch 1: use the single-request generator for an
+interactive stream and batching when multiple requests are ready together.
