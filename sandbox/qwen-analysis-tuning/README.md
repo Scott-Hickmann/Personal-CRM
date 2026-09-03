@@ -58,6 +58,7 @@ memory:
 uv run main.py ollama
 ollama stop qwen3.5:9b
 uv run main.py mlx-lm
+uv run main.py mlx-lm --mlx-model mlx-community/gemma-4-e4b-4bit
 ```
 
 The defaults compare Ollama's `qwen3.5:9b` Q4_K_M model with
@@ -75,9 +76,18 @@ memory), using Ollama 0.32.15, MLX-LM 0.31.3, and MLX 0.32.2:
 | Backend | Prompt | Generation | Inference | Wall |
 | --- | ---: | ---: | ---: | ---: |
 | Ollama Q4_K_M | 406.5 tok/s | 21.8 tok/s | 11.87s | 11.94s |
-| MLX-LM 4-bit | 187.7 tok/s | 27.0 tok/s | 9.71s | 9.95s |
+| MLX-LM Qwen 3.5 9B 4-bit | 187.7 tok/s | 27.0 tok/s | 9.71s | 9.95s |
+| MLX-LM Gemma 4 E4B 4-bit | 411.0 tok/s | 39.2 tok/s | 6.63s | 6.86s |
 
 MLX-LM was **1.24x faster at generation** and **1.22x faster in model
 inference time**. Its median wall time was 1.20x faster. Ollama processed this
 short 45-token prompt 2.17x faster, though its three prompt measurements were
 more variable. All six measured runs reached the same 256-token limit.
+
+Gemma 4 E4B was 1.45x faster than Qwen 3.5 9B at generation and used
+4.36 GB peak memory instead of 5.27 GB. Its conversion has no chat template,
+so the harness tokenized the benchmark prompt directly: Gemma processed 33
+prompt tokens while Qwen processed 45 templated tokens. Generation used the
+same prompt text and 256-token limit. MLX-LM 0.31.3 also needed the upstream
+shared-KV loader fix mirrored in `main.py`; it only discards projections that
+Gemma's shared-KV layers do not execute.

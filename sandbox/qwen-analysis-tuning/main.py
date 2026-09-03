@@ -64,11 +64,39 @@ def load_mlx(model_name):
     import mlx.core as mx
     from mlx_lm import load, stream_generate
 
+    if "gemma-4" in model_name.casefold():
+        from mlx_lm.models import gemma4_text
+
+        original_sanitize = gemma4_text.Model.sanitize
+
+        def sanitize(model, weights):
+            weights = original_sanitize(model, weights)
+            first_shared = (
+                model.args.num_hidden_layers - model.args.num_kv_shared_layers
+            )
+            projections = (
+                ".self_attn.k_proj",
+                ".self_attn.v_proj",
+                ".self_attn.k_norm",
+            )
+            return {
+                key: value
+                for key, value in weights.items()
+                if not (
+                    any(projection in key for projection in projections)
+                    and int(key.split("layers.")[1].split(".")[0]) >= first_shared
+                )
+            }
+
+        gemma4_text.Model.sanitize = sanitize
+
     model, tokenizer = load(model_name)
     return mx, stream_generate, model, tokenizer
 
 
 def render_mlx_prompt(tokenizer, prompt):
+    if getattr(tokenizer, "chat_template", None) is None:
+        return tokenizer.encode(prompt, add_special_tokens=True)
     return tokenizer.apply_chat_template(
         [{"role": "user", "content": prompt}],
         add_generation_prompt=True,
@@ -129,7 +157,9 @@ def print_results(results):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Benchmark Ollama or MLX-LM on Qwen 3.5 9B")
+    parser = argparse.ArgumentParser(
+        description="Benchmark local generation with Ollama or MLX-LM"
+    )
     parser.add_argument("backend", choices=("ollama", "mlx-lm"))
     parser.add_argument("--trials", type=int, default=3)
     parser.add_argument("--max-tokens", type=int, default=256)
