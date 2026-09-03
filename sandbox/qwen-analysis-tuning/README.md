@@ -47,3 +47,37 @@ The revised content prompt classified the sparse human-written email correctly
 in three of three focused trials. The speed numbers vary with generated output
 and daemon contention; they do not show true parallel inference while Ollama
 runs with `-np 1`.
+
+## Ollama versus MLX-LM speed
+
+`main.py` compares warmed, single-request inference with thinking disabled. Run
+the backends separately so their model weights do not compete for unified
+memory:
+
+```sh
+uv run main.py ollama
+ollama stop qwen3.5:9b
+uv run main.py mlx-lm
+```
+
+The defaults compare Ollama's `qwen3.5:9b` Q4_K_M model with
+`mlx-community/Qwen3.5-9B-MLX-4bit`. These are similar-sized 4-bit
+quantizations, not identical weight formats. Each command performs a 32-token
+warmup and three measured 256-token generations, then prints per-trial and
+median prompt throughput, generation throughput, inference time, and wall
+time. The final line is machine-readable JSON.
+
+### Result
+
+Measured September 2, 2026 on an M3 Pro MacBook Pro (12 cores, 18 GB unified
+memory), using Ollama 0.32.15, MLX-LM 0.31.3, and MLX 0.32.2:
+
+| Backend | Prompt | Generation | Inference | Wall |
+| --- | ---: | ---: | ---: | ---: |
+| Ollama Q4_K_M | 406.5 tok/s | 21.8 tok/s | 11.87s | 11.94s |
+| MLX-LM 4-bit | 187.7 tok/s | 27.0 tok/s | 9.71s | 9.95s |
+
+MLX-LM was **1.24x faster at generation** and **1.22x faster in model
+inference time**. Its median wall time was 1.20x faster. Ollama processed this
+short 45-token prompt 2.17x faster, though its three prompt measurements were
+more variable. All six measured runs reached the same 256-token limit.
