@@ -25,11 +25,32 @@ pub(crate) fn normalize(value: &str) -> String {
     digits
 }
 
-fn valid_e164(value: &str) -> Option<String> {
+pub(crate) fn format_for_display(value: &str) -> String {
+    let value = value.trim();
+    let Some(number) = parse_valid(value) else {
+        return value.to_owned();
+    };
+    let mode = if number.country().code() == 1 {
+        Mode::National
+    } else {
+        Mode::International
+    };
+    let formatted = number.format().mode(mode).to_string();
+    if mode == Mode::National {
+        format!("+1 {formatted}")
+    } else {
+        formatted
+    }
+}
+
+fn parse_valid(value: &str) -> Option<phonenumber::PhoneNumber> {
     let number = phonenumber::parse(None, value).ok()?;
-    number
-        .is_valid()
-        .then(|| number.format().mode(Mode::E164).to_string())
+    number.is_valid().then_some(number)
+}
+
+fn valid_e164(value: &str) -> Option<String> {
+    parse_valid(value)
+        .map(|number| number.format().mode(Mode::E164).to_string())
         .map(|formatted| formatted.trim_start_matches('+').to_owned())
 }
 
@@ -52,5 +73,20 @@ mod tests {
     #[test]
     fn keeps_unparseable_short_codes_as_digits() {
         assert_eq!(normalize("738245"), "738245");
+    }
+
+    #[test]
+    fn formats_north_american_numbers_with_country_code() {
+        assert_eq!(format_for_display("+16264648098"), "+1 (626) 464-8098");
+    }
+
+    #[test]
+    fn formats_other_country_codes_in_international_form() {
+        assert_eq!(format_for_display("+442079460018"), "+44 20 7946 0018");
+    }
+
+    #[test]
+    fn leaves_unparseable_values_unchanged() {
+        assert_eq!(format_for_display("738245"), "738245");
     }
 }

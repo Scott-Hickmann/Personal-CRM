@@ -37,7 +37,10 @@ pub fn load(connection: &Connection) -> Result<Overview> {
                 last_interaction_at: row.get(7)?,
                 is_self: row.get::<_, i64>(8)? != 0,
                 tags: separated(row.get(9)?),
-                identities: separated(row.get(10)?),
+                identities: separated(row.get(10)?)
+                    .into_iter()
+                    .map(|value| crate::phone::format_for_display(&value))
+                    .collect(),
             })
         })?
         .collect::<std::result::Result<_, _>>()?;
@@ -62,6 +65,8 @@ mod tests {
              VALUES ('person', 'Alex', 'apple-alex', 'active');
              INSERT INTO identities(id, person_id, kind, value, normalized_value, active)
              VALUES ('identity', 'person', 'email', 'alex@example.com', 'alex@example.com', 1);
+             INSERT INTO identities(id, person_id, kind, value, normalized_value, active)
+             VALUES ('phone', 'person', 'phone', '+16264648098', '16264648098', 1);
              INSERT INTO tags(person_id, tag) VALUES ('person', 'friend');
              INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state)
              VALUES ('other', 'Blair', 'apple-blair', 'active');
@@ -80,7 +85,7 @@ mod tests {
             .find(|person| person.id == "person")
             .unwrap();
         assert_eq!(alex.tags, ["friend"]);
-        assert_eq!(alex.identities, ["alex@example.com"]);
+        assert_eq!(alex.identities, ["alex@example.com", "+1 (626) 464-8098"]);
         assert_eq!(overview.graph.nodes.len(), 2);
         assert_eq!(overview.graph.edges.len(), 1);
     }

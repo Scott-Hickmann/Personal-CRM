@@ -10,8 +10,14 @@ use super::{
 
 pub fn load(connection: &Connection, reference: &str, limit: u32) -> Result<PersonDetail> {
     let person_id = repository::resolve_person_id(connection, reference)?;
+    let mut person = repository::get_person(connection, &person_id)?;
+    for identity in &mut person.identities {
+        if matches!(identity.kind.as_str(), "phone" | "whatsapp") {
+            identity.value = crate::phone::format_for_display(&identity.value);
+        }
+    }
     Ok(PersonDetail {
-        person: repository::get_person(connection, &person_id)?,
+        person,
         score: scoring::explain(connection, &person_id)?,
         interactions: interactions(connection, &person_id, limit)?,
         relationships: relationships(connection, &person_id)?,
