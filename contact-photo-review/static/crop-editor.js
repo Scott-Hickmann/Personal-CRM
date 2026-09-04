@@ -1,6 +1,5 @@
 // Work in original-image pixels; CSS only scales the canvas for display.
-async function editCrop(candidate, token) {
-  const dialog = document.getElementById('crop-dialog');
+async function createCropEditor(candidate, token, preview, onChange) {
   const canvas = document.getElementById('crop-canvas');
   const slider = document.getElementById('crop-size');
   const status = document.getElementById('crop-status');
@@ -9,7 +8,8 @@ async function editCrop(candidate, token) {
   if (!response.ok) throw new Error('Could not load the original photo');
   const url = URL.createObjectURL(await response.blob());
   const image = new Image();
-  let crop = { ...candidate.framing.crop }, drag = null;
+  let crop = { ...candidate.framing.crop }, drag = null, enabled = false;
+  const dirty = () => ['x', 'y', 'size'].some(key => crop[key] !== candidate.framing.crop[key]);
   try {
     image.src = url;
     await image.decode();
@@ -29,12 +29,27 @@ async function editCrop(candidate, token) {
       ctx.drawImage(image, 0, 0);
       ctx.fillStyle = 'rgba(0,0,0,.55)';
       ctx.fillRect(0, 0, width, height);
-      ctx.drawImage(image, crop.x, crop.y, crop.size, crop.size, crop.x, crop.y, crop.size, crop.size);
+      if (dirty()) {
+        ctx.drawImage(image, crop.x, crop.y, crop.size, crop.size, crop.x, crop.y, crop.size, crop.size);
+      } else {
+        ctx.drawImage(preview, crop.x, crop.y, crop.size, crop.size);
+      }
+      // Shade the square's corners to preview a circular Contacts display.
+      ctx.beginPath();
+      ctx.rect(crop.x, crop.y, crop.size, crop.size);
+      ctx.moveTo(crop.x + crop.size, crop.y + crop.size / 2);
+      ctx.arc(crop.x + crop.size / 2, crop.y + crop.size / 2, crop.size / 2, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,.22)';
+      ctx.fill('evenodd');
       ctx.strokeStyle = '#fff';
       ctx.lineWidth = Math.max(2, width / 350);
       ctx.strokeRect(crop.x, crop.y, crop.size, crop.size);
+      ctx.beginPath();
+      ctx.arc(crop.x + crop.size / 2, crop.y + crop.size / 2, crop.size / 2, 0, Math.PI * 2);
+      ctx.stroke();
       slider.value = crop.size;
       status.textContent = `${crop.size} × ${crop.size} pixels · position ${crop.x}, ${crop.y}`;
+      onChange(dirty());
     }
     function point(event) {
       const rect = canvas.getBoundingClientRect();
@@ -42,7 +57,7 @@ async function editCrop(candidate, token) {
         y: (event.clientY - rect.top) * height / rect.height };
     }
     canvas.onpointerdown = event => {
-      if (event.button !== 0) return;
+      if (!enabled || event.button !== 0) return;
       event.preventDefault();
       canvas.focus();
       const p = point(event);
@@ -54,7 +69,7 @@ async function editCrop(candidate, token) {
       draw();
     };
     canvas.onpointermove = event => {
-      if (!drag) return;
+      if (!enabled || !drag) return;
       const p = point(event);
       crop.x = p.x - drag.x;
       crop.y = p.y - drag.y;
@@ -63,7 +78,7 @@ async function editCrop(candidate, token) {
     canvas.onpointerup = canvas.onpointercancel = canvas.onlostpointercapture = () => { drag = null; };
     canvas.onkeydown = event => {
       const delta = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key];
-      if (!delta) return;
+      if (!enabled || !delta) return;
       event.preventDefault();
       const step = event.shiftKey ? 10 : 1;
       crop.x += delta[0] * step;
@@ -71,29 +86,31 @@ async function editCrop(candidate, token) {
       draw();
     };
     slider.oninput = () => {
+      if (!enabled) return;
       const size = Number(slider.value);
       crop.x += (crop.size - size) / 2;
       crop.y += (crop.size - size) / 2;
       crop.size = size;
       draw();
     };
-    dialog.querySelectorAll('button').forEach(button => { button.disabled = false; });
-    document.getElementById('crop-reset').onclick = () => { crop = { ...candidate.framing.automatic }; draw(); };
     draw();
-    dialog.showModal();
-    canvas.focus();
-    return await new Promise(resolve => {
-      document.getElementById('crop-apply').onclick = () => resolve({ ...crop });
-      document.getElementById('crop-cancel').onclick = () => resolve(null);
-      dialog.oncancel = event => { event.preventDefault(); resolve(null); };
-    });
-  } finally {
-    dialog.close();
+    return {
+      get dirty() { return dirty(); },
+      get crop() { return { ...crop }; },
+      reset() { if (enabled) { crop = { ...candidate.framing.automatic }; draw(); } },
+      undo() { if (enabled) { crop = { ...candidate.framing.crop }; draw(); } },
+      setEnabled(value) { enabled = value; if (!value) drag = null; },
+      destroy() {
+        enabled = false;
+        URL.revokeObjectURL(url);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        canvas.onpointerdown = canvas.onpointermove = canvas.onpointerup = canvas.onpointercancel = null;
+        canvas.onlostpointercapture = canvas.onkeydown = null;
+        slider.oninput = null;
+      }
+    };
+  } catch (error) {
     URL.revokeObjectURL(url);
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    canvas.onpointerdown = canvas.onpointermove = canvas.onpointerup = canvas.onpointercancel = null;
-    canvas.onlostpointercapture = canvas.onkeydown = null;
-    slider.oninput = dialog.oncancel = null;
-    dialog.querySelectorAll('button').forEach(button => { button.onclick = null; });
+    throw error;
   }
 }

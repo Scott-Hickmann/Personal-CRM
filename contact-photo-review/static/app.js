@@ -2,7 +2,7 @@ const $ = id => document.getElementById(id);
 const token = location.hash.slice(1) || sessionStorage.getItem('review-token') || '';
 sessionStorage.setItem('review-token', token);
 history.replaceState(null, '', '/');
-let contacts = [], current = null, candidate = null, busy = false, photoUrl = null;
+let contacts = [], current = null, candidate = null, busy = false, photoUrl = null, cropEditor = null;
 
 async function api(path, data) {
   const response = await fetch(path, { method: data ? 'POST' : 'GET',
@@ -16,16 +16,21 @@ function message(text, error = false) {
   $('message').textContent = text;
   $('message').classList.toggle('error', error);
 }
+function updateControls() {
+  document.querySelectorAll('button').forEach(button => { button.disabled = busy; });
+  const ready = !busy && !!candidate && !!cropEditor;
+  $('no').disabled = !ready;
+  $('yes').disabled = !ready || cropEditor.dirty;
+  $('crop-reset').disabled = $('crop-size').disabled = !ready;
+  $('crop-undo').disabled = $('crop-apply').disabled = !ready || !cropEditor.dirty;
+  cropEditor?.setEnabled(ready);
+}
 async function work(task) {
   if (busy) return;
   busy = true;
-  document.querySelectorAll('button').forEach(button => button.disabled = true);
+  updateControls();
   try { await task(); } catch (error) { message(error.message, true); }
-  finally {
-    busy = false;
-    document.querySelectorAll('button').forEach(button => button.disabled = false);
-    $('yes').disabled = $('no').disabled = $('adjust').disabled = !candidate;
-  }
+  finally { busy = false; updateControls(); }
 }
 function renderPeople() {
   const filter = $('filter').value.toLowerCase();
@@ -53,9 +58,10 @@ async function queue() {
 }
 function clearPhoto() {
   candidate = null;
-  $('yes').disabled = $('no').disabled = $('adjust').disabled = true;
-  $('photo').hidden = true;
-  $('photo').removeAttribute('src');
+  cropEditor?.destroy();
+  cropEditor = null;
+  $('crop-editor').hidden = true;
+  updateControls();
   if (photoUrl) URL.revokeObjectURL(photoUrl);
   photoUrl = null;
   $('source').hidden = true;
@@ -65,14 +71,20 @@ function clearPhoto() {
   $('more').hidden = true;
 }
 async function showPhoto(result) {
+  cropEditor?.destroy();
+  cropEditor = null;
   if (photoUrl) URL.revokeObjectURL(photoUrl);
   const response = await fetch(result.image, { headers: { 'X-Review-Token': token } });
   if (!response.ok) throw new Error('Could not load the candidate photo');
   photoUrl = URL.createObjectURL(await response.blob());
-  $('photo').src = photoUrl;
-  await $('photo').decode();
-  $('photo').alt = `Unconfirmed candidate for ${current.name}`;
-  $('photo').hidden = false;
+  const preview = new Image();
+  preview.src = photoUrl;
+  await preview.decode();
+  cropEditor = await createCropEditor(result, token, preview, dirty => {
+    updateControls();
+    message(dirty ? 'Apply your crop changes before saving this photo.' : 'Review the selected crop before saving.');
+  });
+  $('crop-editor').hidden = false;
   $('placeholder').hidden = true;
   const source = new URL(result.source);
   if (!['https:', 'http:'].includes(source.protocol)) throw new Error('Invalid source link');
@@ -136,10 +148,11 @@ $('yes').onclick = () => work(async () => {
   await api('/api/decide', { person: current.id, candidate: candidate.id, approved: true, sha256: candidate.sha256 });
   await next();
 });
-$('adjust').onclick = () => work(async () => {
+$('crop-reset').onclick = () => cropEditor?.reset();
+$('crop-undo').onclick = () => cropEditor?.undo();
+$('crop-apply').onclick = () => work(async () => {
   const selected = candidate;
-  const crop = await editCrop(selected, token);
-  if (!crop) return;
+  const crop = cropEditor.crop;
   candidate = null;
   message('Preparing your adjusted crop…');
   const result = await api('/api/recrop', { person: current.id, candidate: selected.id, sha256: selected.sha256, crop });

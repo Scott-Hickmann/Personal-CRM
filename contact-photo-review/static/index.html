@@ -13,18 +13,18 @@
 <div id="empty"><div class="empty-icon">◌</div><h2>Give your contacts a familiar face.</h2><p>Start with the contacts that don’t have a photo.<br>You decide which photos belong.</p><button id="start" class="primary">Load contacts</button><p class="fine">Searches send the person’s name and organization to Bing.<br>Photos are saved only after you select “Yes, save photo.”</p></div>
 <article id="review" hidden><div class="review-heading"><div><div class="eyebrow">FINDING A PHOTO FOR</div><h2 id="name"></h2><p id="details"></p></div><button id="skip" class="text">Skip for now ↗</button></div>
 <form id="search"><label for="query">Search the web</label><div class="search-row"><input id="query" maxlength="300" required><button>Search</button></div></form>
-<div class="photo-area"><img id="photo" alt="Candidate photo to review" hidden><div id="placeholder">Searching for a candidate…</div></div>
-<button id="adjust" class="text" disabled>Adjust crop</button>
+<div id="placeholder">Searching for a candidate…</div>
+<section id="crop-editor" aria-label="Adjust photo crop" hidden>
+<div class="crop-stage"><canvas id="crop-canvas" tabindex="0" aria-label="Crop position. Drag to move, or use arrow keys. Hold Shift for larger steps."></canvas></div>
+<p class="crop-help">Drag to move the crop. The square is saved; the circle previews its appearance in Contacts.</p>
+<div class="crop-controls"><div><label for="crop-size">Crop size</label><input id="crop-size" type="range" step="1" disabled></div><button id="crop-reset" disabled>Reset to automatic</button></div>
+<div class="crop-actions"><p id="crop-status" aria-live="polite"></p><button id="crop-undo" disabled>Undo changes</button><button id="crop-apply" disabled>Apply crop</button></div>
+</section>
 <div class="source"><span>FOUND ON THE WEB</span><a id="source" target="_blank" rel="noopener noreferrer" hidden></a></div>
 <div class="decision"><div><h3>Is this the right person?</h3><p>This is the exact face crop that will be saved.</p></div><div class="actions"><button id="no" disabled>No, find another</button><button id="yes" class="primary" disabled>Yes, save photo</button></div></div>
 <button id="more" class="text" hidden>Try more candidates →</button>
 <p class="fine">The approved photo is added through Apple Contacts. A backup is saved first.<br>Contacts with an existing photo are never overwritten.</p></article>
 </section></main>
 <footer>One person at a time. Every photo is your choice.</footer>
-<dialog id="crop-dialog" aria-labelledby="crop-title">
-<h2 id="crop-title">Adjust the crop</h2><p>Drag the square to reposition it. Use the slider to include more or less of the photo.</p>
-<div class="crop-stage"><canvas id="crop-canvas" tabindex="0" aria-label="Crop position. Drag to move, or use arrow keys. Hold Shift for larger steps."></canvas></div>
-<label for="crop-size">Crop size</label><input id="crop-size" type="range" step="1"><p id="crop-status" aria-live="polite"></p>
-<div class="crop-actions"><button id="crop-reset">Reset to automatic</button><button id="crop-cancel">Cancel</button><button id="crop-apply" class="primary">Use this crop</button></div>
-</dialog>
+
 </body></html>

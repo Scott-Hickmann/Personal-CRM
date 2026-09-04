@@ -38,10 +38,13 @@ can run. Use the complete session link printed in the terminal when reopening.
    ears. Photos with no detected face, multiple faces, or a face too small for a
    clear crop are skipped automatically. Names alone are not proof of identity;
    face detection frames the photo but does not identify the person.
-4. Optionally choose **Adjust crop** to see the full photo with the current square
-   selected. Drag it (or use arrow keys), adjust the size slider, and choose
-   **Use this crop**. **Reset to automatic** restores the initial framing; **Cancel**
-   leaves the reviewed crop unchanged. Applying a crop never saves to Contacts.
+4. Adjust the crop directly on the main page: drag the square (or use arrow keys)
+   and adjust the size slider. The circle inside it previews a circular Contacts
+   display; the saved image is still square and contains neither outline.
+   **Apply crop** prepares the adjusted image for approval. **Reset to automatic**
+   restores the initial framing; **Undo changes** restores the last applied crop.
+   Saving is disabled until pending crop changes are applied or undone. Applying
+   a crop never saves to Contacts.
 5. **No, find another** permanently rejects that candidate and fetches the next.
    Identical rejected image bytes at different URLs are also skipped.
 6. **Yes, save photo** backs up that contact, adds the exact reviewed image through
