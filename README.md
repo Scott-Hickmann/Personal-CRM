@@ -77,6 +77,15 @@ crm auth gmail remove account@example.com
 
 Refresh tokens are stored in macOS Keychain, not the configuration file. Gmail access uses the read-only scope and GET requests only. Historical searches cover messages involving active iCloud-contact email addresses, while contact discovery considers only direct outgoing mail from the last two years. Discovery messages are checked as header metadata first, and bodies are retrieved only after the message qualifies. Spam, Trash, Drafts, Promotions, Social, Forums, mailing lists, automated senders, and bulk mail are excluded before storage. Unknown incoming-only senders are ignored. Every active email address on the linked iCloud self contact is treated as the owner, including work, personal, and routed addresses. Changes to those addresses trigger resumable Gmail reclassification.
 
+To exclude every message involving a specific external email domain, add it to the Gmail configuration. A domain also matches its subdomains:
+
+```toml
+[gmail]
+ignored_domains = ["lists.stanford.edu"]
+```
+
+Changing this list requeues the resumable Gmail backfill. Matching stored interactions are removed on the next Gmail pass and matching recipients are not proposed as contact candidates.
+
 The initial people-focused backfill is checkpointed by contact search and processes at most 50 message payloads per account in each pass. Completed searches and messages survive sleep, network loss, and daemon restarts; subsequent mailbox updates use Gmail history rather than repeating the backfill.
 
 ## Configure authoritative contacts and Google mirrors
