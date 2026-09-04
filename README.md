@@ -1,15 +1,13 @@
 # Personal CRM
 
-`crm` is a private, Apple-silicon macOS personal CRM with a launchd-managed background daemon. One selected iCloud Contacts container is the identity source of truth: every active CRM person maps to exactly one iCloud contact, while communication sources contribute interactions and suggestions without creating people. Local MLX models summarize interactions, create semantic embeddings, and extract evidence about intimacy, support, affection, shared activity, and conflict repair.
+`crm` is a private macOS personal CRM with a launchd-managed background daemon. One selected iCloud Contacts container is the identity source of truth: every active CRM person maps to exactly one iCloud contact, while communication sources contribute interactions and suggestions without creating people. All processing is deterministic and local; the CRM does not run language models.
 
 ## Requirements
 
-- Apple-silicon macOS
+- macOS
 - Rust and Cargo
-- `uv` for the installed MLX runtime
 - Node.js and pnpm 9 or newer for the local web companion
 - Full Disk Access for the terminal or Codex process when reading protected Apple and WhatsApp databases
-- About 6 GB of free storage for the default Gemma model downloads and MLX runtimes
 - A Google OAuth desktop client JSON file for each Gmail setup session
 - The Google People API enabled on the OAuth project when publishing contacts
 - A persistent code-signing identity for Keychain access
@@ -26,13 +24,13 @@ Create a self-signed code-signing certificate named `Personal CRM` once:
 
 An Apple Development or Developer ID certificate also works. Set `PERSONAL_CRM_CODESIGN_IDENTITY` to its name or SHA-1 hash when running the installer.
 
-Build, sign, and install the executable and its locked MLX runtimes:
+Build, sign, and install the executable:
 
 ```sh
 ./scripts/install-crm
 ```
 
-The default installed path is `~/.local/bin/crm`; its private Python workers are installed beside it at `~/.local/bin/crm.support`. Override the executable with `PERSONAL_CRM_INSTALL_PATH` if necessary. The installer refuses to replace an existing signed installation when its designated code requirement differs. It restarts a daemon already using that path. During the first migration from a development executable, it stops the old daemon so Keychain access can be migrated before the signed daemon starts. The first analysis run downloads `mlx-community/gemma-4-E4B-it-qat-4bit` and `mlx-community/embeddinggemma-300m-bf16` into the standard Hugging Face cache.
+The default installed path is `~/.local/bin/crm`. Override it with `PERSONAL_CRM_INSTALL_PATH` if necessary. The installer removes the obsolete `crm.support` model runtime, refuses to replace an existing signed installation when its designated code requirement differs, and restarts a daemon already using that path. During the first migration from a development executable, it stops the old daemon so Keychain access can be migrated before the signed daemon starts.
 
 The first signing operation may ask for permission to use the certificate's private key. Choose **Always Allow** so later installations are also non-interactive.
 
@@ -77,9 +75,9 @@ crm auth gmail list
 crm auth gmail remove account@example.com
 ```
 
-Refresh tokens are stored in macOS Keychain, not the configuration file. Gmail access uses the read-only scope and GET requests only. Gmail is treated as relationship evidence rather than a mailbox archive: historical searches cover messages involving active iCloud-contact email addresses, while contact discovery considers only direct outgoing mail from the last two years. Discovery messages are checked as header metadata first, and bodies are retrieved only after the message qualifies. Spam, Trash, Drafts, Promotions, Social, Forums, mailing lists, automated senders, and bulk mail are excluded before storage or analysis. Unknown incoming-only senders are ignored. Every active email address on the linked iCloud self contact is treated as the owner, including work, personal, and routed addresses. Changes to those addresses trigger resumable Gmail reclassification.
+Refresh tokens are stored in macOS Keychain, not the configuration file. Gmail access uses the read-only scope and GET requests only. Historical searches cover messages involving active iCloud-contact email addresses, while contact discovery considers only direct outgoing mail from the last two years. Discovery messages are checked as header metadata first, and bodies are retrieved only after the message qualifies. Spam, Trash, Drafts, Promotions, Social, Forums, mailing lists, automated senders, and bulk mail are excluded before storage. Unknown incoming-only senders are ignored. Every active email address on the linked iCloud self contact is treated as the owner, including work, personal, and routed addresses. Changes to those addresses trigger resumable Gmail reclassification.
 
-The initial people-focused backfill is checkpointed by contact search and processes at most 50 message payloads per account in each daemon job. Completed searches and messages survive sleep, network loss, and daemon restarts. The daemon interleaves additional Gmail batches with review and local analysis; subsequent mailbox updates use Gmail history rather than repeating the backfill.
+The initial people-focused backfill is checkpointed by contact search and processes at most 50 message payloads per account in each pass. Completed searches and messages survive sleep, network loss, and daemon restarts; subsequent mailbox updates use Gmail history rather than repeating the backfill.
 
 ## Configure authoritative contacts and Google mirrors
 
@@ -133,7 +131,7 @@ crm review
 crm stop
 ```
 
-`crm status` reports daemon and source health, jobs, reviews, total active contacts, total analyzable interactions, and the analyzed subset. `crm status --live` refreshes those totals every half second while retaining active job progress, source status, and recent activity. Active jobs also identify the contact, message metadata, candidate, or current analysis batch when that context is available; message bodies are never written to live-status telemetry.
+`crm status` reports daemon and source health, persisted work, dirty people awaiting scoring, reviews, active contacts, and interactions. `crm status --live` refreshes those totals every half second while retaining active progress, source status, and recent activity. Message bodies are never written to live-status telemetry.
 
 ## Local web companion
 
@@ -144,9 +142,9 @@ crm ui
 crm ui --port 3100
 ```
 
-The CLI starts `pnpm dev` in [`web/`](web/), binds it to the loopback interface only, and passes its own executable and active config path to the server. The app never opens the CRM database directly: contact search, detail views, interaction reveals, relationship graphs, notes, facts, tags, follow-ups, and closeness ratings all execute through Rust CLI JSON commands. Message bodies appear as previews until explicitly revealed. The relationship page renders the observed, undirected network in Sigma and supports person, classification, confidence, affinity-tier, activity, and layout filters.
+The CLI starts `pnpm dev` in [`web/`](web/), binds it to the loopback interface only, and passes its own executable and active config path to the server. The app never opens the CRM database directly: contact search, detail views, interaction reveals, relationship graphs, notes, facts, tags, follow-ups, and closeness ratings all execute through Rust CLI JSON commands. Message bodies appear as previews until explicitly revealed. The relationship page renders the observed, undirected network in Sigma and supports person, affinity-tier, activity, and layout filters.
 
-The daemon watches the selected iCloud Contacts database, iMessage, WhatsApp, call-history, and Photos databases with a short debounce. Independent workers let those sources, Gmail, and local MLX analysis make progress concurrently; each workstream remains single-flight. Gmail history is polled every minute and linked Photos people are reconciled every five minutes as a fallback. New interactions trigger MLX analysis immediately, and each analysis run drains the complete pending snapshot before deterministic scoring runs. Jobs are coalesced in SQLite, changes arriving during a running job cause a follow-up pass, interrupted work survives restarts, and failures retry automatically.
+The daemon watches the selected iCloud Contacts database, iMessage, WhatsApp, call-history, and Photos databases with a short debounce. One coordinator executes all writes serially. Gmail history is polled every minute and linked Photos people are reconciled every five minutes as a fallback. There is no accumulating job queue: SQLite stores one coalescing state row per source and maintenance operation, plus dirty conversation and person sets. Each source pass checkpoints `sync`, `relationships`, and `dirty_people` stages. Changes arriving during a running pass increment its generation and cause one follow-up pass; interrupted work resumes from its last stage and failures retry with backoff.
 
 iMessage, WhatsApp, Apple calls, and WhatsApp calls keep durable high-water checkpoints. Normal runs read only new rows plus a 1,000-row overlap for late edits. A daily full audit catches hard deletions that these local databases do not expose through a portable change feed. Contacts uses Core Data row versions as a lightweight change token when available, falling back to a full authoritative snapshot when the installed schema cannot provide one. Automatic Photos reconciliation queries only people already linked by UUID rather than loading every named Photos person.
 
@@ -159,14 +157,13 @@ crm run whatsapp
 crm run apple-calls
 crm run whatsapp-calls
 crm run gmail
-crm run analysis
 crm run scoring
 crm run photos
 crm run google-publish
 crm run suggestions
 ```
 
-Analysis snapshots every eligible pending interaction and processes up to eight at a time by default. MLX-LM further splits each generation pass so padded prompt and reserved completion tokens stay under `max_batch_tokens`; short messages retain large batches while long email contexts use smaller batches. Participant scoring requests are flattened into the same token-budgeted passes, and only invalid responses enter one batched repair pass. Relationship classification runs afterward over existing structural pairs using a deterministic, bounded Markdown selection of messages; the model cannot create or remove an edge. MLX releases cached allocations between generation sub-batches. Successful summaries accumulate into `embedding_batch_size` groups for MLX EmbeddingGemma, whose worker exits after each group so its weights do not remain resident during later generation. Each fully validated interaction is persisted in its own transaction, so successful peers complete even when another item fails and interrupted work resumes from the remaining records. The generation worker stays loaded for later analysis jobs in the same daemon process. Interactions imported during a running analysis cause an immediate follow-up pass; scoring waits until that follow-up work is drained. The editable prompts and response schemas are in [`prompts/`](prompts/). The `mlx` configuration section controls `generation_model`, `embedding_model`, `batch_size`, `max_batch_tokens`, `embedding_batch_size`, and `max_tokens`. There is intentionally no remote or alternate-model fallback.
+`crm run` uses the same persisted coordinator as the daemon. If the daemon is running, the command requests a new generation and waits for it. If the daemon is stopped, it executes pending work serially in the foreground. Scoring operates only on `dirty_people`; a manual `crm run scoring` deliberately marks all active non-self people dirty first.
 
 ## People and manual information
 
@@ -242,31 +239,29 @@ crm query people --include-retired \
 crm explain "Alex"
 crm affinity rate --person "Alex" --rating 6
 crm affinity clear --person "Alex"
-crm graph "Alex" --min-confidence 0.7
+crm graph "Alex"
 ```
 
 People queries include active people by default; `--include-retired` makes retired records available for explicit filtering. The query language accepts allowlisted fields only, uses bound SQL parameters, and supports `and`, `or`, `not`, parentheses, comparisons, `contains`, `in`, `is null`, day/week durations, sorting, grouping, selection, and limits.
 
-`crm graph` emits a Mermaid diagram of relationships created whenever two active contacts share a Gmail thread, iMessage chat, or WhatsApp chat. Conversation membership is stored separately from message participation, so silent group members do not gain interaction or closeness credit. Edges exist independently of MLX; local analysis only assigns a type and classification confidence, using `unclear` when the selected messages do not support a specific type. `--min-confidence` filters that classification confidence.
+`crm graph` emits a Mermaid diagram of structural relationships created whenever two active contacts share a Gmail thread, iMessage chat, or WhatsApp chat. Conversation membership is stored separately from message participation, so silent group members do not gain interaction or closeness credit. An edge reports only the number of shared conversation contexts; it does not classify the relationship.
 
 ## Closeness model
 
-Closeness uses a local hybrid model:
+Closeness uses deterministic behavioral data:
 
 - Behavioral evidence combines log-scaled 90-day volume (25%), 365-day volume (10%), active-week consistency (20%), channel diversity (5%), incoming/outgoing balance (15%), recency with a 60-day half-life (15%), and relationship duration (10%).
-- Gemma 4 on MLX emits separate 0–3 observations for intimacy, emotional support, practical support, affection, shared activity, and conflict repair. Each observation retains a factual summary and its source interaction. Extraction confidence weights reliability; it never contributes relationship strength directly.
-- Relational evidence uses a 365-day half-life and combines signal quality, repeated evidence, and breadth across the six dimensions. Its affinity weight grows with analyzed coverage up to 35%; before MLX evidence is available, the behavioral score remains the prior.
 - Optional 1–7 user ratings directly anchor rated people to the matching tier. Once five ratings exist, they also fit a regularized monotonic calibration for unrated people; below that threshold the uncalibrated prior remains in place. Ratings can be managed in the person page or with `crm affinity rate` and `crm affinity clear`.
 - Tiers: `core` (80+), `close` (60+), `familiar` (40+), `acquaintance` (20+), and `peripheral` (below 20).
 - Activity: `active` through 30 days, `cooling` through 90 days, `dormant` after 90 days, or `never`.
 
-Use `crm explain PERSON` or the person page to inspect behavior, model dimensions, evidence coverage, calibration, and the resulting score. Inferred relationship types use the single-word fallback `unclear` when evidence is weak or unknown. After upgrading from the earlier heuristic, retained interaction bodies are queued once for re-analysis so the new relational signals can be populated locally.
+Use `crm explain PERSON` or the person page to inspect behavioral components, calibration, and the resulting score.
 
 ## Source safety
 
 Local source SQLite databases are opened with SQLite's read-only flag, `PRAGMA query_only`, and an authorizer that rejects inserts, updates, deletes, schema changes, writable pragmas, and attached databases. Schema fingerprints and required columns are checked before import. Gmail is read with a read-only OAuth scope. The CRM never sends messages or writes to Gmail messages, iMessage, WhatsApp, or call history.
 
-External writes are limited to automatic non-destructive updates of tool-managed Google contacts, explicitly approved Google deletions, explicitly approved iCloud contact creation, and user-approved Photos imports. Source-deleted message bodies and locally classified non-personal email bodies may still be cleared for privacy; their interaction metadata and tombstones remain.
+External writes are limited to automatic non-destructive updates of tool-managed Google contacts, explicitly approved Google deletions, explicitly approved iCloud contact creation, and user-approved Photos imports. Source-deleted message bodies are cleared while their interaction metadata and tombstones remain.
 
 ## Codex skills
 
@@ -274,7 +269,7 @@ The repository contains three skills:
 
 - `crm-lookup`: read people, history, dormant/frequency views, scores, and connection charts.
 - `crm-update`: dry-run and apply notes, facts, tags, and explicitly selected contact reviews.
-- `crm-sync-analyze`: inspect daemon health or manually run recovery jobs.
+- `crm-sync-analyze`: inspect daemon health or manually run recovery work.
 
 They are linked into `~/.agents/skills` during project setup. The skills invoke the signed binary at `/Users/scotthickmann/.local/bin/crm`, so they do not depend on interactive shell configuration and do not cause Keychain to reevaluate a development build.
 

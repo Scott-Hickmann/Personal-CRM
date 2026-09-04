@@ -58,4 +58,4 @@ Use `--link-icloud CONTACT-ID` instead when the user explicitly chooses an exist
 - Store only what the user asked to remember. Do not manufacture facts from communication history.
 - Prefer a note for free-form context, a fact for a stable key/value, and a tag for user-defined grouping.
 - Contact creation is allowed only through an explicitly approved review. Do not edit Gmail, iMessage, WhatsApp, or call-history sources.
-- This skill does not authenticate accounts, synchronize sources, or run model analysis.
+- This skill does not authenticate accounts, synchronize sources, or run maintenance work.

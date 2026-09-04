@@ -43,15 +43,15 @@ Rank people by communication frequency:
 /Users/scotthickmann/.local/bin/crm --format json query people --select id,display_name,interaction_count,affinity_tier --filter 'is_self = 0' --sort=-interaction_count
 ```
 
-Filter by closeness with `affinity_tier = core`, `close`, `familiar`, `acquaintance`, or `peripheral`. Use `query interactions`, `relationships`, `mentions`, `followups`, or `sources` for focused questions. Select only fields the user needs and cap broad results with `--limit`.
+Filter by closeness with `affinity_tier = core`, `close`, `familiar`, `acquaintance`, or `peripheral`. Use `query interactions`, `relationships`, `followups`, or `sources` for focused questions. Select only fields the user needs and cap broad results with `--limit`.
 
 ## Connection chart
 
 ```sh
-/Users/scotthickmann/.local/bin/crm graph "PERSON" --min-confidence 0.7
+/Users/scotthickmann/.local/bin/crm graph "PERSON"
 ```
 
-Return the Mermaid block when a visual connection chart is appropriate. State that edges are inferred and include their confidence. Never present an inferred relationship as confirmed fact.
+Return the Mermaid block when a visual connection chart is appropriate. State that each edge means the two people were observed in at least one shared conversation; do not infer the nature of their relationship.
 
 ## Guardrails
 
