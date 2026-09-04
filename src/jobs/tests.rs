@@ -94,6 +94,29 @@ fn recovers_jobs_interrupted_by_a_daemon_restart() {
 }
 
 #[test]
+fn counts_unresolved_failure_kinds_instead_of_historical_rows() {
+    let directory = tempfile::tempdir().unwrap();
+    let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
+    connection
+        .execute_batch(
+            "INSERT INTO jobs(kind, state, reason) VALUES
+                ('gmail', 'failed', 'first'),
+                ('gmail', 'failed', 'second'),
+                ('analysis', 'failed', 'third');",
+        )
+        .unwrap();
+    assert_eq!(unresolved_failed_count(&connection).unwrap(), 2);
+
+    connection
+        .execute(
+            "INSERT INTO jobs(kind, state, reason) VALUES ('gmail', 'complete', 'recovered')",
+            [],
+        )
+        .unwrap();
+    assert_eq!(unresolved_failed_count(&connection).unwrap(), 1);
+}
+
+#[test]
 fn continues_resumable_gmail_backfill_after_each_batch() {
     let directory = tempfile::tempdir().unwrap();
     let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
