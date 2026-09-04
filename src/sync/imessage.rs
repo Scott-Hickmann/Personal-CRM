@@ -134,6 +134,7 @@ pub fn sync(
 }
 
 fn refresh_memberships(source: &Connection, crm: &Connection) -> Result<()> {
+    let transaction = crm.unchecked_transaction()?;
     let mut chats = source.prepare(
         "SELECT ROWID, COALESCE(guid, chat_identifier), NULLIF(display_name, '') FROM chat
          WHERE COALESCE(guid, chat_identifier) IS NOT NULL",
@@ -163,13 +164,14 @@ fn refresh_memberships(source: &Connection, crm: &Connection) -> Result<()> {
             })
             .collect::<Vec<_>>();
         crate::relationships::replace_members(
-            crm,
+            &transaction,
             "imessage",
             &thread_native_id,
             title.as_deref(),
             &members,
         )?;
     }
+    transaction.commit()?;
     Ok(())
 }
 

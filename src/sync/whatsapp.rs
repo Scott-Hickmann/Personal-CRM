@@ -164,6 +164,7 @@ fn refresh_memberships(
     crm: &Connection,
     identities: &LidResolver,
 ) -> Result<()> {
+    let transaction = crm.unchecked_transaction()?;
     let mut chats = source.prepare(
         "SELECT Z_PK, ZCONTACTJID, NULLIF(ZPARTNERNAME, '') FROM ZWACHATSESSION
          WHERE COALESCE(ZREMOVED, 0)=0 AND ZCONTACTJID IS NOT NULL",
@@ -213,13 +214,14 @@ fn refresh_memberships(
             )
             .collect::<Vec<_>>();
         crate::relationships::replace_members(
-            crm,
+            &transaction,
             "whatsapp",
             &thread_native_id,
             partner_name.as_deref(),
             &members,
         )?;
     }
+    transaction.commit()?;
     Ok(())
 }
 
