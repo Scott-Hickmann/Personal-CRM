@@ -118,6 +118,7 @@ pub fn sync(
         "contacts",
     );
     for (index, contact) in contacts.iter().enumerate() {
+        progress.focus([crate::contact_label::apple(contact)]);
         if reconcile_contact(
             crm,
             contact,
@@ -311,11 +312,11 @@ fn retire_missing_with_progress(
     stage_total: u64,
 ) -> Result<()> {
     let mut statement = crm.prepare(
-        "SELECT id, apple_contact_id FROM people
+        "SELECT id, apple_contact_id, display_name FROM people
          WHERE lifecycle_state='active' AND apple_contact_id IS NOT NULL",
     )?;
-    let rows: Vec<(String, String)> = statement
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+    let rows: Vec<(String, String, String)> = statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
         .collect::<std::result::Result<_, _>>()?;
     drop(statement);
     let total = rows.len() as u64;
@@ -327,7 +328,8 @@ fn retire_missing_with_progress(
         false,
         "contacts",
     );
-    for (index, (person_id, apple_id)) in rows.into_iter().enumerate() {
+    for (index, (person_id, apple_id, display_name)) in rows.into_iter().enumerate() {
+        progress.focus([display_name]);
         if seen.contains(apple_id.as_str()) {
             progress.progress(
                 "Checking for removed iCloud contacts",

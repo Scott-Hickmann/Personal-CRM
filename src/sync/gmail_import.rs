@@ -69,6 +69,10 @@ pub(super) fn process_queue(
     );
     let mut report = ProcessReport::default();
     for (index, queued) in queued.into_iter().enumerate() {
+        progress.focus_now([format!(
+            "{} · fetching Gmail message {}",
+            context.account, queued.id
+        )]);
         let prepared = prepare_message(
             client,
             &queued.id,
@@ -76,6 +80,7 @@ pub(super) fn process_queue(
             context.self_addresses,
             context.known_emails,
         )?;
+        progress.focus_now([gmail_focus(context.account, &queued.id, &prepared)]);
         let transaction = crate::db::immediate_transaction(crm)?;
         match prepared {
             PreparedMessage::Deleted => {
@@ -151,6 +156,26 @@ pub(super) fn process_queue(
         "emails",
     );
     Ok(report)
+}
+
+fn gmail_focus(account: &str, id: &str, prepared: &PreparedMessage) -> String {
+    let PreparedMessage::Accept {
+        message,
+        participants,
+        ..
+    } = prepared
+    else {
+        return format!("{account} · Gmail message {id}");
+    };
+    let people = participants
+        .iter()
+        .map(|participant| participant.name.as_deref().unwrap_or(&participant.email))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let subject = header(message, "Subject")
+        .filter(|subject| !subject.trim().is_empty())
+        .unwrap_or_else(|| "(no subject)".into());
+    format!("{people} · Gmail · {subject}")
 }
 
 fn prepare_message(

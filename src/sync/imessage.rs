@@ -62,6 +62,20 @@ pub fn sync(
         imported.insert(native_id.clone());
         let from_me = row.get::<_, i64>(4)? != 0;
         let identity: Option<String> = row.get(7)?;
+        let display_name: Option<String> = row.get(9)?;
+        let occurred_at: String = row.get(3)?;
+        let subject: Option<String> = row.get(5)?;
+        progress.focus([format!(
+            "{} · iMessage · {} · {}",
+            display_name
+                .as_deref()
+                .or(identity.as_deref())
+                .unwrap_or("Unknown participant"),
+            subject
+                .as_deref()
+                .unwrap_or(if from_me { "outgoing" } else { "incoming" }),
+            occurred_at.get(..10).unwrap_or(&occurred_at),
+        )]);
         let interaction_id = upsert_interaction(
             crm,
             "imessage",
@@ -69,9 +83,9 @@ pub fn sync(
             row.get::<_, Option<String>>(1)?.as_deref(),
             &row.get::<_, String>(2)?,
             "message",
-            &row.get::<_, String>(3)?,
+            &occurred_at,
             Some(if from_me { "outgoing" } else { "incoming" }),
-            row.get::<_, Option<String>>(5)?.as_deref(),
+            subject.as_deref(),
             row.get::<_, Option<String>>(6)?.as_deref(),
             &serde_json::json!({"has_attachments": row.get::<_, i64>(8)? != 0}),
             &source.run_at,
@@ -81,7 +95,7 @@ pub fn sync(
                 crm,
                 &interaction_id,
                 &identity,
-                row.get::<_, Option<String>>(9)?.as_deref(),
+                display_name.as_deref(),
                 if from_me { "recipient" } else { "sender" },
             )?;
         }

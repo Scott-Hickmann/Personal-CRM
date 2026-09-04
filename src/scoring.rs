@@ -46,14 +46,14 @@ struct Candidate {
 
 pub fn recalculate_all(connection: &Connection, progress: &mut ProgressTracker) -> Result<usize> {
     let mut statement = connection.prepare(
-        "SELECT id FROM people p WHERE p.lifecycle_state='active' AND NOT EXISTS
+        "SELECT id, display_name FROM people p WHERE p.lifecycle_state='active' AND NOT EXISTS
          (SELECT 1 FROM identities i WHERE i.person_id=p.id AND i.is_self=1 AND i.active=1)",
     )?;
-    let ids: Vec<String> = statement
-        .query_map([], |row| row.get(0))?
+    let people: Vec<(String, String)> = statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<std::result::Result<_, _>>()?;
     drop(statement);
-    let total = ids.len() as u64;
+    let total = people.len() as u64;
     progress.stage(
         "Recalculating relationship scores",
         1,
@@ -62,13 +62,15 @@ pub fn recalculate_all(connection: &Connection, progress: &mut ProgressTracker) 
         false,
         "people",
     );
-    let mut candidates = Vec::with_capacity(ids.len());
-    for id in &ids {
+    let mut candidates = Vec::with_capacity(people.len());
+    for (id, name) in &people {
+        progress.focus([name.clone()]);
         candidates.push(calculate_candidate(connection, id)?);
     }
     let ratings = ratings(connection)?;
     let calibration = fit_calibration(&candidates, &ratings);
     for (index, candidate) in candidates.iter().enumerate() {
+        progress.focus([people[index].1.clone()]);
         persist(
             connection,
             candidate,
@@ -90,7 +92,7 @@ pub fn recalculate_all(connection: &Connection, progress: &mut ProgressTracker) 
         false,
         "people",
     );
-    Ok(ids.len())
+    Ok(people.len())
 }
 
 pub fn explain(connection: &Connection, person_id: &str) -> Result<ScoreExplanation> {

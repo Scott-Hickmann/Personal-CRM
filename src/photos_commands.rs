@@ -150,6 +150,7 @@ pub(crate) fn reconcile_automatic(
     let total = linked.len() as u64;
     progress.stage("Reconciling Photos people", 2, 2, total, false, "people");
     for (index, person) in linked.into_iter().enumerate() {
+        progress.focus([person.display_name.clone()]);
         let link = person.link.as_ref().unwrap();
         let Some(uuid) = link.photos_person_uuid.as_deref() else {
             progress.progress(

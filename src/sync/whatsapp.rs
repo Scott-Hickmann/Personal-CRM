@@ -77,6 +77,21 @@ pub fn sync(
         } else {
             profile_name.or(push_name).or(partner_name)
         };
+        let occurred_at: String = row.get(3)?;
+        let identity = if from_me {
+            recipient.as_deref()
+        } else {
+            sender.as_deref()
+        };
+        progress.focus([format!(
+            "{} · WhatsApp · {} · {}",
+            display_name
+                .as_deref()
+                .or(identity)
+                .unwrap_or("Unknown participant"),
+            if from_me { "outgoing" } else { "incoming" },
+            occurred_at.get(..10).unwrap_or(&occurred_at),
+        )]);
         let interaction_id = upsert_interaction(
             crm,
             "whatsapp",
@@ -84,7 +99,7 @@ pub fn sync(
             row.get::<_, Option<String>>(2)?.as_deref(),
             "whatsapp",
             "message",
-            &row.get::<_, String>(3)?,
+            &occurred_at,
             Some(if from_me { "outgoing" } else { "incoming" }),
             None,
             row.get::<_, Option<String>>(5)?.as_deref(),

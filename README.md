@@ -132,7 +132,7 @@ crm review
 crm stop
 ```
 
-`crm status` reports daemon and source health, jobs, reviews, total active contacts, total analyzable interactions, and the analyzed subset. `crm status --live` refreshes those totals every half second while retaining active job progress, source status, and recent activity.
+`crm status` reports daemon and source health, jobs, reviews, total active contacts, total analyzable interactions, and the analyzed subset. `crm status --live` refreshes those totals every half second while retaining active job progress, source status, and recent activity. Active jobs also identify the contact, message metadata, candidate, or current analysis batch when that context is available; message bodies are never written to live-status telemetry.
 
 ## Local web companion
 

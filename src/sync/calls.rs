@@ -53,6 +53,17 @@ pub(super) fn sync_apple(
         imported.insert(native_id.clone());
         let originated = row.get::<_, i64>(5)? != 0;
         let answered = row.get::<_, i64>(6)? != 0;
+        let identity: Option<String> = row.get(4)?;
+        let name: Option<String> = row.get(9)?;
+        let occurred_at: String = row.get(2)?;
+        progress.focus([format!(
+            "{} · Apple call · {} · {}",
+            name.as_deref()
+                .or(identity.as_deref())
+                .unwrap_or("Unknown caller"),
+            if originated { "outgoing" } else { "incoming" },
+            occurred_at.get(..10).unwrap_or(&occurred_at),
+        )]);
         let metadata = serde_json::json!({"duration_seconds": row.get::<_, f64>(3)?, "answered": answered, "call_type": row.get::<_, i64>(7)?, "provider": row.get::<_, Option<String>>(8)?});
         let interaction_id = upsert_interaction(
             crm,
@@ -61,19 +72,19 @@ pub(super) fn sync_apple(
             None,
             "apple_call",
             "call",
-            &row.get::<_, String>(2)?,
+            &occurred_at,
             Some(if originated { "outgoing" } else { "incoming" }),
             None,
             None,
             &metadata,
             &source.run_at,
         )?;
-        if let Some(identity) = row.get::<_, Option<String>>(4)? {
+        if let Some(identity) = identity {
             add_participant(
                 crm,
                 &interaction_id,
                 &identity,
-                row.get::<_, Option<String>>(9)?.as_deref(),
+                name.as_deref(),
                 if originated { "recipient" } else { "caller" },
             )?;
         }
@@ -149,6 +160,13 @@ pub(super) fn sync_whatsapp(
         cursor = cursor.max(row.get(0)?);
         let native_id: String = row.get(1)?;
         imported.insert(native_id.clone());
+        let identity: Option<String> = row.get(5)?;
+        let occurred_at: String = row.get(2)?;
+        progress.focus([format!(
+            "{} · WhatsApp call · {}",
+            identity.as_deref().unwrap_or("Unknown participant"),
+            occurred_at.get(..10).unwrap_or(&occurred_at),
+        )]);
         let metadata = serde_json::json!({"duration_seconds": row.get::<_, f64>(3)?, "outcome": row.get::<_, i64>(4)?});
         let interaction_id = upsert_interaction(
             crm,
@@ -157,7 +175,7 @@ pub(super) fn sync_whatsapp(
             None,
             "whatsapp_call",
             "call",
-            &row.get::<_, String>(2)?,
+            &occurred_at,
             None,
             None,
             None,
@@ -170,7 +188,7 @@ pub(super) fn sync_whatsapp(
                 [&interaction_id],
             )?;
         }
-        if let Some(identity) = row.get::<_, Option<String>>(5)? {
+        if let Some(identity) = identity {
             add_participant(
                 crm,
                 &interaction_id,

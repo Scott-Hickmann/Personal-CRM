@@ -151,6 +151,14 @@ pub(crate) fn enqueue_with_progress(
         "identities",
     );
     for (index, (_, candidate)) in grouped.into_iter().enumerate() {
+        progress.focus([crate::contact_label::format(
+            candidate.name.as_deref(),
+            (!candidate.identity.contains('@')).then_some(candidate.identity.as_str()),
+            candidate
+                .identity
+                .contains('@')
+                .then_some(candidate.identity.as_str()),
+        )]);
         if !identity_belongs_to_icloud_contact(connection, &candidate.identity)? {
             candidates.push(candidate);
         }
@@ -198,6 +206,7 @@ pub(crate) fn enqueue_with_progress(
             (Some(candidate.identity.as_str()), None)
         };
         let label = crate::contact_label::format(candidate.name.as_deref(), phone, email);
+        progress.focus([label.clone()]);
         let sources = source_labels(channels.split(','));
         review::enqueue(
             connection,

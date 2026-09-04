@@ -148,6 +148,8 @@ pub(super) fn scan(
 
     let mut report = ScanReport::default();
     for (scope_key, kind, query, page_token) in scopes {
+        let contact = scope_key.rsplit(':').next().unwrap_or(&scope_key);
+        progress.focus_now([format!("{contact} · Gmail search · {account}")]);
         let path = list_path(&query, page_token.as_deref());
         let page: MessageList = match client.get(&path)? {
             ApiResponse::Data(page) => page,

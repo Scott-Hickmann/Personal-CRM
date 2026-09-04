@@ -141,6 +141,7 @@ fn apply_actions(
     progress: &mut ProgressTracker,
 ) -> Result<()> {
     for (index, action) in actions.iter().enumerate() {
+        progress.focus([planned_action_focus(action)]);
         let client = clients.get(&action.account).ok_or_else(|| {
             CrmError::Contacts(format!("missing Google client for {}", action.account))
         })?;
@@ -173,6 +174,30 @@ fn apply_actions(
         );
     }
     Ok(())
+}
+
+fn planned_action_focus(action: &PlannedAction) -> String {
+    let person = action
+        .desired
+        .as_ref()
+        .map(|desired| &desired.person)
+        .or(action.remote.as_ref());
+    let label = person
+        .map(google_person_label)
+        .unwrap_or_else(|| action.apple_id.clone());
+    format!("{:?} · {label} · {}", action.kind, action.account)
+}
+
+fn google_person_label(person: &Person) -> String {
+    let name = person.names.first().map(display_name).unwrap_or_default();
+    crate::contact_label::format(
+        (!name.is_empty()).then_some(name.as_str()),
+        person.phone_numbers.first().map(|item| item.value.as_str()),
+        person
+            .email_addresses
+            .first()
+            .map(|item| item.value.as_str()),
+    )
 }
 
 fn enqueue_delete(connection: &Connection, action: &PlannedAction) -> Result<()> {
@@ -228,6 +253,7 @@ fn enqueue_unmanaged_candidates_with_progress(
     progress: &mut ProgressTracker,
 ) -> Result<()> {
     for (index, person) in people.iter().enumerate() {
+        progress.focus([format!("{} · {account}", google_person_label(person))]);
         if owner_id(person).is_some() {
             progress.progress(
                 format!("Checking unmanaged contacts in {account}"),

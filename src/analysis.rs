@@ -104,13 +104,21 @@ fn analyze_interactions(
             false,
             "interactions",
         );
+        progress.focus_now(inputs.iter().map(interaction_focus));
         let outputs = analyzer.analyze(&inputs)?;
         for (input, output) in inputs.into_iter().zip(outputs) {
             match output {
                 Ok(output) => {
                     ready.push((input, output));
                     if ready.len() == config.mlx.embedding_batch_size {
-                        persist_ready(config, connection, &analyzer, &mut ready, &mut report)?;
+                        persist_ready(
+                            config,
+                            connection,
+                            &analyzer,
+                            &mut ready,
+                            &mut report,
+                            progress,
+                        )?;
                     }
                 }
                 Err(error) => {
@@ -127,7 +135,14 @@ fn analyze_interactions(
             "interactions",
         );
     }
-    persist_ready(config, connection, &analyzer, &mut ready, &mut report)?;
+    persist_ready(
+        config,
+        connection,
+        &analyzer,
+        &mut ready,
+        &mut report,
+        progress,
+    )?;
     progress.finish_stage(
         "Analyzed interactions",
         report.analyzed as u64,
@@ -144,10 +159,12 @@ fn persist_ready(
     analyzer: &Analyzer,
     ready: &mut Vec<(InputInteraction, AnalysisOutput)>,
     report: &mut AnalysisReport,
+    progress: &mut ProgressTracker,
 ) -> Result<()> {
     if ready.is_empty() {
         return Ok(());
     }
+    progress.focus_now(ready.iter().map(|(input, _)| interaction_focus(input)));
     let summaries: Vec<_> = ready
         .iter()
         .map(|(_, output)| output.items[0].summary.clone())
@@ -167,6 +184,24 @@ fn persist_ready(
         report.relationship_signals += interaction_report.relationship_signals;
     }
     Ok(())
+}
+
+fn interaction_focus(input: &InputInteraction) -> String {
+    let people = input
+        .participants
+        .iter()
+        .map(|participant| participant.display_name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let date = input.occurred_at.get(..10).unwrap_or(&input.occurred_at);
+    let context = input
+        .subject
+        .as_deref()
+        .filter(|subject| !subject.trim().is_empty())
+        .map(|subject| format!("“{}”", subject.trim()))
+        .or_else(|| input.direction.clone())
+        .unwrap_or_else(|| "interaction".into());
+    format!("{people} · {} · {context} · {date}", input.channel)
 }
 
 fn pending_ids(connection: &Connection) -> Result<Vec<String>> {
@@ -304,6 +339,10 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(input.participants[0].display_name, "Alex");
+        assert_eq!(
+            interaction_focus(&input),
+            "Alex · gmail · interaction · 2026-01-01"
+        );
         connection
             .execute(
                 "UPDATE interactions SET analysis_state='complete' WHERE id='linked'",
