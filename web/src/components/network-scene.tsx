@@ -7,10 +7,14 @@ import { Group, type PerspectiveCamera } from "three";
 import { useTheme } from "next-themes";
 import Link from "next/link";
 import { endpointId, normalizeNetwork, positionNetwork, type NetworkData, type NetworkNode, type NetworkLink } from "@/lib/network";
+import type { Cluster } from "@/lib/clusters";
+import { useClusterLabels } from "@/components/network-cluster-labels";
 
 type Props = {
   graph: NetworkData; visible: { nodes: Set<string>; links: Set<string> };
   focused?: string; layout: string; fitRequest: number;
+  clusters: Cluster[]; colorBy: string; selectedCluster?: Cluster; clearCluster: () => void;
+  selectionRequest: number;
 };
 const motionQuery = "(prefers-reduced-motion: reduce)";
 function subscribeMotion(callback: () => void) {
@@ -31,11 +35,11 @@ export function NetworkScene(props: Props) {
   return <SceneBoundary><Scene key={props.layout} {...props} /></SceneBoundary>;
 }
 
-function Scene({ graph, visible, focused, layout, fitRequest }: Props) {
+function Scene({ graph, visible, focused, layout, fitRequest, clusters, colorBy, selectedCluster, clearCluster, selectionRequest }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const scene = useRef<ForceGraphMethods<NetworkNode, NetworkLink>>(undefined);
   const [size, setSize] = useState({ width: 0, height: 0 });
-  const [selection, setSelection] = useState<{ id?: string; focused?: string }>();
+  const [selection, setSelection] = useState<{ id?: string; focused?: string; request: number }>();
   const [settledData, setSettledData] = useState<NetworkData | null>(null);
   const finalizedData = useRef<NetworkData | null>(null);
   const [contextLost, setContextLost] = useState(false);
@@ -59,12 +63,18 @@ function Scene({ graph, visible, focused, layout, fitRequest }: Props) {
       });
     }
   }, [data, layout, size.width]);
-  const selectedId = selection && selection.focused === focused ? selection.id : focused;
-  const active = selectedId && visible.nodes.has(selectedId) ? selectedId : undefined;
+  const selectedId = selection && selection.focused === focused && selection.request === selectionRequest ? selection.id : focused;
+  const active = !selectedCluster && selectedId && visible.nodes.has(selectedId) ? selectedId : undefined;
+  const highlighted = Boolean(active || selectedCluster);
+  const clusterColors = useMemo(() => new Map(clusters.flatMap((cluster) => cluster.members.map((id) => [id, cluster.color] as const))), [clusters]);
+  useClusterLabels(scene, data, clusters, visible.nodes, settled && colorBy === "cluster" && !active, selectedCluster?.id);
   const selectedPerson = data.nodes.find((node) => node.id === active);
   const neighbors = useMemo(() => {
     const ids = new Set<string>();
-    if (active) {
+    if (selectedCluster) {
+      const members = new Set(selectedCluster.members);
+      for (const node of data.nodes) if (members.has(node.personId) && visible.nodes.has(node.id)) ids.add(node.id);
+    } else if (active) {
       ids.add(active);
       for (const link of data.links) {
         if (visible.links.has(link.id) && [endpointId(link.source), endpointId(link.target)].includes(active)) {
@@ -73,8 +83,10 @@ function Scene({ graph, visible, focused, layout, fitRequest }: Props) {
       }
     }
     return ids;
-  }, [active, data, visible]);
-  const activeLink = useCallback((link: NetworkLink) => Boolean(active && [endpointId(link.source), endpointId(link.target)].includes(active)), [active]);
+  }, [active, data, visible, selectedCluster]);
+  const activeLink = useCallback((link: NetworkLink) => selectedCluster
+    ? neighbors.has(endpointId(link.source)) && neighbors.has(endpointId(link.target))
+    : Boolean(active && [endpointId(link.source), endpointId(link.target)].includes(active)), [active, neighbors, selectedCluster]);
   const frame = useCallback((focus = true) => {
     if (!scene.current || !visible.nodes.size) return;
     const node = focus ? data.nodes.find((node) => node.id === focused) : undefined;
@@ -113,20 +125,20 @@ function Scene({ graph, visible, focused, layout, fitRequest }: Props) {
   }, [size.width, size.height]);
 
   const labelObject = useCallback((node: NetworkNode) => {
-    if (active && !neighbors.has(node.id)) return new Group();
+    if (highlighted && !neighbors.has(node.id)) return new Group();
     const label = new SpriteText(node.label, 2, dark ? "#fafafa" : "#171717");
     label.position.y = 4;
     label.material.depthTest = false;
     label.renderOrder = 1;
     return label;
-  }, [active, dark, neighbors]);
+  }, [highlighted, dark, neighbors]);
   const edgeObject = useCallback((link: NetworkLink) => {
-    if (!activeLink(link)) return new Group();
+    if (selectedCluster || !activeLink(link)) return new Group();
     const label = new SpriteText(link.label, 2.5, dark ? "#e5e5e5" : "#404040");
     label.material.depthTest = false;
     label.renderOrder = 1;
     return label;
-  }, [activeLink, dark]);
+  }, [activeLink, dark, selectedCluster]);
 
   return <div ref={container} className="size-full" aria-label="3D relationship network">
     {size.width > 0 && <ForceGraph3D<NetworkNode, NetworkLink>
@@ -135,14 +147,14 @@ function Scene({ graph, visible, focused, layout, fitRequest }: Props) {
       showNavInfo={false} enableNodeDrag={false} nodeResolution={8}
       nodeVisibility={(node) => visible.nodes.has(node.id)} linkVisibility={(link) => visible.links.has(link.id)}
       nodeVal={(node) => (node.size / 4) ** 3} nodeRelSize={1}
-      nodeColor={(node) => active && !neighbors.has(node.id) ? (dark ? "rgba(64,64,64,0.15)" : "rgba(212,212,212,0.15)") : node.color}
+      nodeColor={(node) => highlighted && !neighbors.has(node.id) ? (dark ? "rgba(64,64,64,0.15)" : "rgba(212,212,212,0.15)") : colorBy === "cluster" ? clusterColors.get(node.personId) ?? node.color : node.color}
       nodeLabel={() => ""} nodeThreeObject={labelObject} nodeThreeObjectExtend
       linkColor={(link) => activeLink(link) ? (dark ? "#e5e5e5" : "#404040") : (dark ? "#555555" : "#bbbbbb")}
       linkWidth={(link) => activeLink(link) ? 0.5 + Math.min(1.5, Math.log2(link.weight + 1) * 0.2) : 0}
       linkOpacity={0.5} linkThreeObject={edgeObject} linkThreeObjectExtend
       linkPositionUpdate={(object, { start, end }) => { object.position.set((start.x + end.x) / 2, (start.y + end.y) / 2, (start.z + end.z) / 2); }}
-      onNodeClick={(node) => setSelection({ id: node.id === active ? undefined : node.id, focused })}
-      onBackgroundClick={() => setSelection({ focused })}
+      onNodeClick={(node) => { clearCluster(); setSelection({ id: node.id === active ? undefined : node.id, focused, request: selectionRequest }); }}
+      onBackgroundClick={() => { clearCluster(); setSelection({ focused, request: selectionRequest }); }}
       warmupTicks={layout === "organic" ? 100 : 0} cooldownTicks={layout === "organic" && !reducedMotion ? 100 : 0}
       onEngineStop={() => {
         // Selection styling updates also stop the engine again.
@@ -155,7 +167,7 @@ function Scene({ graph, visible, focused, layout, fitRequest }: Props) {
     {selectedPerson && <div className="absolute top-4 right-4 flex max-w-[calc(100%-2rem)] flex-wrap items-center gap-3 rounded-lg border bg-background/95 px-3 py-2 text-sm shadow-sm">
       <span className="font-medium" aria-live="polite">{selectedPerson.label}</span>
       <Link className="underline underline-offset-4" href={`/people/${encodeURIComponent(selectedPerson.personId)}`}>Open profile</Link>
-      <button className="text-muted-foreground hover:text-foreground" onClick={() => setSelection({ focused })} aria-label="Clear selection">Clear</button>
+      <button className="text-muted-foreground hover:text-foreground" onClick={() => setSelection({ focused, request: selectionRequest })} aria-label="Clear selection">Clear</button>
     </div>}
     {!settled && <div className="pointer-events-none absolute top-4 left-4 rounded bg-background/80 p-2 text-sm" role="status">Arranging network…</div>}
     {contextLost && <div className="bg-background absolute inset-0 grid place-items-center p-6" role="alert">Graphics connection lost. Reload to restore the graph.</div>}

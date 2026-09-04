@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import type { Overview } from "@/lib/types";
+import type { ClusterLevel } from "@/lib/clusters";
 
 const ClientNetworkGraph = dynamic(
   () => import("@/components/network-graph").then((module) => module.NetworkGraph),
@@ -11,6 +12,6 @@ const ClientNetworkGraph = dynamic(
   },
 );
 
-export function NetworkGraphLoader(props: { overview: Overview; focusedPerson?: string }) {
+export function NetworkGraphLoader(props: { overview: Overview; clusterLevels: ClusterLevel[]; focusedPerson?: string }) {
   return <ClientNetworkGraph {...props} />;
 }
