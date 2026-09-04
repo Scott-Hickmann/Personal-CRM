@@ -25,7 +25,7 @@ class Review:
     def __init__(self, directory, contacts, crawler=search.search, downloader=search.download):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        for name in ("images", "backups"):
+        for name in ("images", "originals", "backups"):
             (self.directory / name).mkdir(exist_ok=True, mode=0o700)
         self.contacts, self.crawler, self.downloader = contacts, crawler, downloader
         self.db = sqlite3.connect(self.directory / "review.sqlite3", check_same_thread=False)
@@ -44,6 +44,9 @@ class Review:
         if "crop_version" not in {row[1] for row in self.db.execute("PRAGMA table_info(candidates)")}:
             with self.db:
                 self.db.execute("ALTER TABLE candidates ADD COLUMN crop_version INTEGER NOT NULL DEFAULT 0")
+        if "crop_data" not in {row[1] for row in self.db.execute("PRAGMA table_info(candidates)")}:
+            with self.db:
+                self.db.execute("ALTER TABLE candidates ADD COLUMN crop_data TEXT")
 
     def refresh(self):
         result = self.contacts.call("list", {})
@@ -89,24 +92,24 @@ class Review:
             for row in rows:
                 try:
                     path = self.directory / "images" / (row["id"] + ".jpg")
-                    if not row["hash"] or not path.exists() or row["crop_version"] != 1:
+                    original = self.directory / "originals" / path.name
+                    if not row["hash"] or not path.exists() or row["crop_version"] != 2 or not original.exists():
                         raw = path.with_suffix(".download")
                         try:
                             raw.write_bytes(self.downloader(row["url"]))
-                            self.contacts.call("normalize", {"input": str(raw), "output": str(path)})
+                            metadata = self.contacts.call("normalize", {"input": str(raw), "output": str(path), "original": str(original)})
                         finally:
                             raw.unlink(missing_ok=True)
                         digest = hashlib.sha256(path.read_bytes()).hexdigest()
-                        duplicate = self.db.execute("SELECT 1 FROM candidates WHERE person=? AND hash=? AND status='rejected'",
-                                                    (person_id, digest)).fetchone()
+                        duplicate = self.db.execute("""SELECT 1 FROM candidates WHERE person=? AND status='rejected'
+                            AND (hash=? OR json_extract(crop_data,'$.original_sha256')=?)""",
+                                                    (person_id, digest, metadata["original_sha256"])).fetchone()
                         if duplicate:
                             raise ValueError("This rejected image also appeared at another URL")
                         with self.db:
-                            self.db.execute("UPDATE candidates SET hash=?,crop_version=1 WHERE id=?", (digest, row["id"]))
-                    else:
-                        digest = row["hash"]
-                    return {"id": row["id"], "person": person_id, "source": row["source"], "title": row["title"],
-                            "image": "/images/" + row["id"] + ".jpg", "query": person["query"], "sha256": digest}
+                            self.db.execute("UPDATE candidates SET hash=?,crop_version=2,crop_data=? WHERE id=?",
+                                            (digest, json.dumps(metadata), row["id"]))
+                    return self.preview(row["id"], person)
                 except (ValueError, OSError, subprocess.SubprocessError) as error:
                     with self.db:
                         self.db.execute("UPDATE candidates SET status='failed',error=? WHERE id=?", (str(error), row["id"]))
@@ -135,7 +138,7 @@ class Review:
             with self.db:
                 self.db.execute("UPDATE candidates SET status='rejected' WHERE id=?", (candidate_id,))
             return {"rejected": True}
-        if row["crop_version"] != 1 or expected_hash != row["hash"]:
+        if row["crop_version"] != 2 or expected_hash != row["hash"]:
             raise ValueError("Photo crop changed; reload and review the current crop before saving")
         image = self.directory / "images" / (candidate_id + ".jpg")
         if hashlib.sha256(image.read_bytes()).hexdigest() != row["hash"]:
@@ -159,6 +162,41 @@ class Review:
             self.db.execute("UPDATE candidates SET status='approved' WHERE id=?", (candidate_id,))
             self.db.execute("UPDATE people SET status='saved' WHERE id=?", (person_id,))
         return {"saved": True}
+
+    def preview(self, candidate_id, person):
+        row = self.db.execute("SELECT * FROM candidates WHERE id=?", (candidate_id,)).fetchone()
+        return {"id": row["id"], "person": row["person"], "source": row["source"], "title": row["title"],
+                "image": "/images/" + row["id"] + ".jpg", "query": person["query"], "sha256": row["hash"],
+                "original": "/originals/" + row["id"] + ".jpg", "framing": json.loads(row["crop_data"])}
+
+    def recrop(self, person_id, candidate_id, expected_hash, crop):
+        person = self.person(person_id)
+        row = self.db.execute("SELECT * FROM candidates WHERE id=? AND person=? AND status='pending'",
+                              (candidate_id, person_id)).fetchone()
+        if not row or row["crop_version"] != 2 or not expected_hash or row["hash"] != expected_hash:
+            raise ValueError("Photo changed; reload before adjusting the crop")
+        metadata = json.loads(row["crop_data"])
+        if not isinstance(crop, dict) or any(type(crop.get(key)) is not int for key in ("x", "y", "size")):
+            raise ValueError("Crop coordinates must be whole pixels")
+        x, y, size = (crop[key] for key in ("x", "y", "size"))
+        if x < 0 or y < 0 or size < 96 or x + size > metadata["width"] or y + size > metadata["height"]:
+            raise ValueError("Choose a square of at least 96 pixels inside the original photo")
+        original = self.directory / "originals" / (candidate_id + ".jpg")
+        if hashlib.sha256(original.read_bytes()).hexdigest() != metadata["original_sha256"]:
+            raise ValueError("Original photo changed; reload before cropping")
+        path = self.directory / "images" / original.name
+        temporary = path.with_suffix(".recrop")
+        try:
+            self.contacts.call("recrop", {"input": str(original), "output": str(temporary),
+                "original_sha256": metadata["original_sha256"], "x": str(x), "y": str(y), "size": str(size)})
+            digest = hashlib.sha256(temporary.read_bytes()).hexdigest()
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
+        metadata["crop"] = {"x": x, "y": y, "size": size}
+        with self.db:
+            self.db.execute("UPDATE candidates SET hash=?,crop_data=? WHERE id=?", (digest, json.dumps(metadata), candidate_id))
+        return self.preview(candidate_id, person)
 
     def skip(self, person_id):
         self.person(person_id)

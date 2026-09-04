@@ -54,6 +54,15 @@ h3{font-size:15px;font-weight:600;margin:0}
 footer{border-top:1px solid #d8ddd3;margin:10px 5vw;padding:20px 0;color:#8a9583;font-size:11px}
 #demo{background:#e7dfbc;text-align:center;font-size:12px;padding:10px}
 [hidden]{display:none!important}
+#crop-dialog{border:1px solid #ccd5c5;border-radius:14px;padding:24px;max-width:min(760px,94vw);max-height:95vh;overflow:auto;background:#f6f5ef;color:inherit}
+#crop-dialog::backdrop{background:rgba(15,28,22,.65)}
+#crop-dialog>p{font-size:13px;color:#62766c;margin:8px 0 16px}
+.crop-stage{display:flex;justify-content:center;margin:12px 0 20px;background:#dce2d6;border-radius:8px;overflow:hidden}
+#crop-canvas{display:block;width:auto;height:auto;max-width:100%;max-height:50vh;touch-action:none;cursor:move}
+#crop-size{padding:0;accent-color:#284f3f}
+#crop-status{font-size:11px!important}
+.crop-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.crop-actions button:first-child{margin-right:auto}
 @media(max-width:900px){main{gap:25px;padding:25px;grid-template-columns:220px minmax(0,1fr)}
 aside{padding-right:20px}
 h1{font-size:34px}

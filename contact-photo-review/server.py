@@ -2,6 +2,7 @@
 """Loopback-only review UI. All API reads and writes require a session token."""
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import secrets
@@ -54,7 +55,8 @@ def handler(review, token, crawler=None):
         def do_GET(self):
             path = urlsplit(self.path).path
             static = {"/": ("index.html", "text/html; charset=utf-8"),
-                      "/app.js": ("app.js", "text/javascript"), "/style.css": ("style.css", "text/css"),
+                      "/app.js": ("app.js", "text/javascript"), "/crop-editor.js": ("crop-editor.js", "text/javascript"),
+                      "/style.css": ("style.css", "text/css"),
                       "/favicon.svg": ("favicon.svg", "image/svg+xml")}
             if path in static:
                 name, kind = static[path]
@@ -66,12 +68,12 @@ def handler(review, token, crawler=None):
                 if path == "/api/queue":
                     self.reply(200, {**review.queue(), "demo": isinstance(review.contacts, DemoContacts),
                                      "crawl": crawler.describe() if crawler else "Demo search"})
-                elif path.startswith("/images/"):
-                    name = path.removeprefix("/images/")
+                elif path.startswith(("/images/", "/originals/")):
+                    folder, name = path.lstrip("/").split("/", 1)
                     if len(name) != 36 or not name.endswith(".jpg") or any(c not in "0123456789abcdef" for c in name[:-4]):
                         self.reply(404, {"error": "Unknown photo"})
                         return
-                    file = review.directory / "images" / name
+                    file = review.directory / folder / name
                     if not file.is_file():
                         self.reply(404, {"error": "Photo not found"})
                         return
@@ -102,6 +104,8 @@ def handler(review, token, crawler=None):
                         if type(body.get("approved")) is not bool:
                             raise ValueError("Approval must be explicitly true or false")
                         result = review.decide(str(body["person"]), str(body["candidate"]), body["approved"], body.get("sha256"))
+                    elif path == "/api/recrop":
+                        result = review.recrop(str(body["person"]), str(body["candidate"]), body.get("sha256"), body.get("crop"))
                     elif path == "/api/skip":
                         result = review.skip(str(body["person"]))
                     elif path == "/api/resume":
@@ -130,13 +134,26 @@ class DemoContacts:
         if command == "list":
             return {"contacts": self.people, "total": len(self.people)}
         if command == "normalize":
-            Path(payload["output"]).write_bytes(Path(payload["input"]).read_bytes())
+            original = Path(payload["input"]).read_bytes()
+            Path(payload["original"]).write_bytes(original)
+            crop = {"x": 140, "y": 80, "size": 320}
+            Path(payload["output"]).write_bytes(demo_crop(original, crop))
+            return {"width": 600, "height": 600, "crop": crop, "automatic": crop,
+                    "original_sha256": hashlib.sha256(original).hexdigest()}
+        if command == "recrop":
+            Path(payload["output"]).write_bytes(demo_crop(Path(payload["input"]).read_bytes(), payload))
             return {}
         if command == "approve":
             Path(payload["backup"]).write_text("Demo backup; no real contact was accessed.\n")
             self.people = [p for p in self.people if p["id"] != payload["id"]]
             return {"saved": True}
         raise ValueError("Unknown demo command")
+
+
+def demo_crop(original, crop):
+    if not original.startswith(b"<svg"):
+        return original + f' crop:{crop["x"]},{crop["y"]},{crop["size"]}'.encode()
+    return original.replace(b"<svg ", f'<svg viewBox="{crop["x"]} {crop["y"]} {crop["size"]} {crop["size"]}" '.encode(), 1)
 
 
 def demo_search(query, page):

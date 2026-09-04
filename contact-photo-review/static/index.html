@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Contact Photo Review</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Contact Photo Review</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/style.css"><script src="/crop-editor.js" defer></script><script src="/app.js" defer></script></head>
 <body>
 <header><a class="brand" href="/">◉ <span>Photo review</span></a><span class="local">LOCAL · APPLE CONTACTS</span><button id="refresh">Refresh contacts</button></header>
 <div id="demo" hidden>Demo mode · Sample contacts and illustrations. No changes to Apple Contacts.</div>
@@ -14,10 +14,17 @@
 <article id="review" hidden><div class="review-heading"><div><div class="eyebrow">FINDING A PHOTO FOR</div><h2 id="name"></h2><p id="details"></p></div><button id="skip" class="text">Skip for now ↗</button></div>
 <form id="search"><label for="query">Search the web</label><div class="search-row"><input id="query" maxlength="300" required><button>Search</button></div></form>
 <div class="photo-area"><img id="photo" alt="Candidate photo to review" hidden><div id="placeholder">Searching for a candidate…</div></div>
+<button id="adjust" class="text" disabled>Adjust crop</button>
 <div class="source"><span>FOUND ON THE WEB</span><a id="source" target="_blank" rel="noopener noreferrer" hidden></a></div>
 <div class="decision"><div><h3>Is this the right person?</h3><p>This is the exact face crop that will be saved.</p></div><div class="actions"><button id="no" disabled>No, find another</button><button id="yes" class="primary" disabled>Yes, save photo</button></div></div>
 <button id="more" class="text" hidden>Try more candidates →</button>
 <p class="fine">The approved photo is added through Apple Contacts. A backup is saved first.<br>Contacts with an existing photo are never overwritten.</p></article>
 </section></main>
 <footer>One person at a time. Every photo is your choice.</footer>
+<dialog id="crop-dialog" aria-labelledby="crop-title">
+<h2 id="crop-title">Adjust the crop</h2><p>Drag the square to reposition it. Use the slider to include more or less of the photo.</p>
+<div class="crop-stage"><canvas id="crop-canvas" tabindex="0" aria-label="Crop position. Drag to move, or use arrow keys. Hold Shift for larger steps."></canvas></div>
+<label for="crop-size">Crop size</label><input id="crop-size" type="range" step="1"><p id="crop-status" aria-live="polite"></p>
+<div class="crop-actions"><button id="crop-reset">Reset to automatic</button><button id="crop-cancel">Cancel</button><button id="crop-apply" class="primary">Use this crop</button></div>
+</dialog>
 </body></html>

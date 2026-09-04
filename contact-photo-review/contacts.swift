@@ -72,9 +72,16 @@ func encodeImage(_ image: CGImage) throws -> Data {
 
 func normalize(_ input: [String: String]) throws {
     let data = try Data(contentsOf: URL(fileURLWithPath: input["input"] ?? ""))
-    let output = try encodeImage(cropFace(decodeImage(data)))
+    // Keep an upright, metadata-free original so later crops use these same pixels.
+    let original = try encodeImage(decodeImage(data))
+    let image = try decodeImage(original)
+    let rect = try detectFaceCrop(image)
+    let output = try encodeImage(renderCrop(image, rect: rect))
+    try original.write(to: URL(fileURLWithPath: input["original"] ?? ""), options: .atomic)
     try output.write(to: URL(fileURLWithPath: input["output"] ?? ""), options: .atomic)
-    try emit(["sha256": digest(output)])
+    try emit(["sha256": digest(output), "original_sha256": digest(original),
+              "width": image.width, "height": image.height, "crop": cropCoordinates(rect),
+              "automatic": cropCoordinates(rect)])
 }
 
 func prepareApproval(_ contact: CNContact, _ input: [String: String], _ data: Data) throws -> CNMutableContact {
@@ -94,6 +101,7 @@ func mainCommand() throws {
     let command = CommandLine.arguments.dropFirst().first ?? ""
     let input = try JSONSerialization.jsonObject(with: FileHandle.standardInput.readDataToEndOfFile()) as? [String: String] ?? [:]
     if command == "normalize" { try normalize(input); return }
+    if command == "recrop" { try recrop(input); return }
     try require(["list", "approve"].contains(command), "Unknown command")
     let store = CNContactStore()
     let semaphore = DispatchSemaphore(value: 0)

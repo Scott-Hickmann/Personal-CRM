@@ -14,6 +14,8 @@ import UniformTypeIdentifiers
                                 bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
         context.setFillColor(CGColor(red: 0.3, green: 0.6, blue: 0.5, alpha: 1))
         context.fill(CGRect(x: 0, y: 0, width: 1500, height: 1200))
+        context.setFillColor(CGColor(red: 0.8, green: 0.2, blue: 0.1, alpha: 1))
+        context.fill(CGRect(x: 750, y: 0, width: 750, height: 1200))
         let raw = NSMutableData()
         let destination = CGImageDestinationCreateWithData(raw, UTType.jpeg.identifier as CFString, 1, nil)!
         CGImageDestinationAddImage(destination, context.makeImage()!, [kCGImagePropertyExifDictionary: ["UserComment": "private metadata"]] as CFDictionary)
@@ -43,6 +45,25 @@ import UniformTypeIdentifiers
             do {
                 _ = try faceCropRect(width: 1500, height: 1200, faces: faces)
                 preconditionFailure("Ambiguous or tiny face must not be cropped")
+            } catch is Failure { }
+        }
+        let originalHash = digest(raw as Data)
+        let adjusted = directory.appendingPathComponent("adjusted.jpg")
+        let cropInput = ["input": original.path, "output": adjusted.path, "original_sha256": originalHash,
+                         "x": "0", "y": "0", "size": "300"]
+        try recrop(cropInput)
+        let firstCrop = try Data(contentsOf: adjusted)
+        try recrop(cropInput.merging(["x": "900"]) { _, new in new })
+        let secondCrop = try Data(contentsOf: adjusted)
+        precondition(firstCrop != secondCrop, "Moving across the original must change the saved pixels")
+        let adjustedImage = try decodeImage(secondCrop)
+        let unchangedOriginal = try Data(contentsOf: original)
+        precondition(adjustedImage.width == 300)
+        precondition(unchangedOriginal == raw as Data, "Recropping must preserve the original")
+        for change in [["x": "-1"], ["size": "95"], ["x": "1499"], ["x": "1.5"], ["original_sha256": "changed"]] {
+            do {
+                try recrop(cropInput.merging(change) { _, new in new })
+                preconditionFailure("Invalid manual crop must fail")
             } catch is Failure { }
         }
 

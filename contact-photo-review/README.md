@@ -38,12 +38,16 @@ can run. Use the complete session link printed in the terminal when reopening.
    ears. Photos with no detected face, multiple faces, or a face too small for a
    clear crop are skipped automatically. Names alone are not proof of identity;
    face detection frames the photo but does not identify the person.
-4. **No, find another** permanently rejects that candidate and fetches the next.
+4. Optionally choose **Adjust crop** to see the full photo with the current square
+   selected. Drag it (or use arrow keys), adjust the size slider, and choose
+   **Use this crop**. **Reset to automatic** restores the initial framing; **Cancel**
+   leaves the reviewed crop unchanged. Applying a crop never saves to Contacts.
+5. **No, find another** permanently rejects that candidate and fetches the next.
    Identical rejected image bytes at different URLs are also skipped.
-5. **Yes, save photo** backs up that contact, adds the exact reviewed image through
+6. **Yes, save photo** backs up that contact, adds the exact reviewed image through
    Apple's Contacts framework, then moves to the next contact. The saved crop is
    exactly the one you reviewed; older cached photos are reprocessed before review.
-6. Refine a search with a company or other useful context, or skip a contact.
+7. Refine a search with a company or other useful context, or skip a contact.
    **Bring back skipped contacts** resumes skipped cards. **Refresh contacts**
    reconciles the queue with Apple Contacts and retries background discovery.
 
@@ -72,7 +76,10 @@ included in automatic searches. Source-page links open directly in your browser.
 - The server binds only to `127.0.0.1`, checks API origin/host and a random session
   token, and never loads remote images directly in the review page.
 - Private state lives in ignored `.local/review/`: `review.sqlite3`, `images/`,
-  and `backups/`. Demo data is isolated in `.local/demo/`. New files are accessible
+  `originals/`, and `backups/`. Originals preserve the full framing, are rotated
+  upright, stripped of metadata, and resized to at most 2048 pixels. Every manual
+  crop uses this original instead of repeatedly cropping a crop. Demo data is
+  isolated in `.local/demo/`. New files are accessible
   only to your macOS user. Backups contain contact details; treat them accordingly.
 
 To reverse a mistaken choice, remove the photo from that card in Apple Contacts.
@@ -95,4 +102,6 @@ stale/cross-contact submissions, failed saves, queue reconciliation, pagination,
 rejected-image deduplication, API authorization, and unsafe download destinations.
 Crop tests cover square framing, coordinate conversion, edge placement, ambiguous
 faces, cache upgrades, and refusing approval from a stale crop preview.
+Manual-crop tests also cover original preservation, bounds validation, resetting,
+and approval of the exact adjusted image.
 `--demo` exercises the UI without requesting Contacts access or saving real photos.

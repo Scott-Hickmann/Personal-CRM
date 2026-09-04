@@ -23,11 +23,17 @@ func faceCropRect(width: Int, height: Int, faces: [CGRect]) throws -> CGRect {
     return crop
 }
 
-func cropFace(_ image: CGImage) throws -> CGImage {
+func detectFaceCrop(_ image: CGImage) throws -> CGRect {
     let request = VNDetectFaceRectanglesRequest()
     try VNImageRequestHandler(cgImage: image, orientation: .up).perform([request])
-    let rect = try faceCropRect(width: image.width, height: image.height,
-                                faces: (request.results ?? []).map(\.boundingBox))
+    return try faceCropRect(width: image.width, height: image.height,
+                           faces: (request.results ?? []).map(\.boundingBox))
+}
+
+func renderCrop(_ image: CGImage, rect: CGRect) throws -> CGImage {
+    try require(rect.width >= 96 && rect.width == rect.height && rect == rect.integral
+        && CGRect(x: 0, y: 0, width: image.width, height: image.height).contains(rect),
+        "Choose a square of at least 96 pixels inside the original photo")
     guard let cropped = image.cropping(to: rect) else { throw Failure(message: "Cannot crop face") }
     if cropped.width <= 1024 { return cropped }
     guard let context = CGContext(data: nil, width: 1024, height: 1024, bitsPerComponent: 8,
@@ -39,4 +45,20 @@ func cropFace(_ image: CGImage) throws -> CGImage {
     context.draw(cropped, in: CGRect(x: 0, y: 0, width: 1024, height: 1024))
     guard let result = context.makeImage() else { throw Failure(message: "Cannot render face crop") }
     return result
+}
+
+func cropCoordinates(_ rect: CGRect) -> [String: Int] {
+    ["x": Int(rect.minX), "y": Int(rect.minY), "size": Int(rect.width)]
+}
+
+func recrop(_ input: [String: String]) throws {
+    let data = try Data(contentsOf: URL(fileURLWithPath: input["input"] ?? ""))
+    try require(digest(data) == input["original_sha256"], "Original photo changed; reload before cropping")
+    guard let x = Int(input["x"] ?? ""), let y = Int(input["y"] ?? ""), let size = Int(input["size"] ?? "") else {
+        throw Failure(message: "Invalid crop coordinates")
+    }
+    let rect = CGRect(x: x, y: y, width: size, height: size)
+    let output = try encodeImage(renderCrop(decodeImage(data), rect: rect))
+    try output.write(to: URL(fileURLWithPath: input["output"] ?? ""), options: .atomic)
+    try emit(["sha256": digest(output)])
 }

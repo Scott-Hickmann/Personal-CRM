@@ -114,6 +114,45 @@ class ReviewTests(unittest.TestCase):
         self.assertTrue(current["sha256"])
         self.assertEqual(self.review.db.execute("SELECT count(*) FROM candidates WHERE status='failed'").fetchone()[0], 1)
 
+    def test_manual_crop_uses_original_and_invalidates_previous_preview(self):
+        first = self.review.candidate("demo-1")
+        original = Path(self.temp.name) / "originals" / (first["id"] + ".jpg")
+        original_bytes = original.read_bytes()
+        crop = {"x": 10, "y": 20, "size": 400}
+        updated = self.review.recrop("demo-1", first["id"], first["sha256"], crop)
+        self.assertNotEqual(first["sha256"], updated["sha256"])
+        self.assertEqual(updated["framing"]["crop"], crop)
+        self.assertEqual(updated["framing"]["automatic"], first["framing"]["automatic"])
+        self.assertEqual(original.read_bytes(), original_bytes)
+        with self.assertRaisesRegex(ValueError, "crop changed"):
+            self.review.decide("demo-1", first["id"], True, first["sha256"])
+        with self.assertRaisesRegex(ValueError, "Photo changed"):
+            self.review.recrop("demo-1", first["id"], first["sha256"], crop)
+        reset = self.review.recrop("demo-1", updated["id"], updated["sha256"], updated["framing"]["automatic"])
+        self.assertEqual(first["sha256"], reset["sha256"])
+        self.review.decide("demo-1", reset["id"], True, reset["sha256"])
+
+    def test_manual_crop_rejects_wrong_person_bounds_and_modified_original(self):
+        first = self.review.candidate("demo-1")
+        crop = {"x": 0, "y": 0, "size": 300}
+        with self.assertRaises(ValueError):
+            self.review.recrop("demo-2", first["id"], first["sha256"], crop)
+        for change in ({"x": -1}, {"y": 500}, {"size": 95}, {"size": 601}, {"x": 1.5}, {"x": True}):
+            with self.assertRaises(ValueError):
+                self.review.recrop("demo-1", first["id"], first["sha256"], {**crop, **change})
+        (Path(self.temp.name) / "originals" / (first["id"] + ".jpg")).write_bytes(b"tampered")
+        with self.assertRaisesRegex(ValueError, "Original photo changed"):
+            self.review.recrop("demo-1", first["id"], first["sha256"], crop)
+        self.assertFalse(any(command in {"recrop", "approve"} for command, _ in self.native.calls))
+
+    def test_rejecting_manual_crop_also_rejects_same_original_at_other_urls(self):
+        self.review.downloader = lambda _: b"same original"
+        first = self.review.candidate("demo-1")
+        adjusted = self.review.recrop("demo-1", first["id"], first["sha256"], {"x": 0, "y": 0, "size": 400})
+        self.review.decide("demo-1", adjusted["id"], False)
+        with self.assertRaises(ValueError):
+            self.review.candidate("demo-1")
+
     def test_refresh_preserves_skips_and_removes_contacts_with_photos(self):
         self.review.skip("demo-1")
         self.review.refresh()
@@ -163,6 +202,12 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(request("/api/queue", **{"X-Review-Token": "secret"}), 200)
         self.assertEqual(request("/api/decide", {"approved": "false"}, **{"X-Review-Token": "secret", "Content-Type": "application/json"}), 400)
         self.assertEqual(request("/images/../../contacts.swift", **{"X-Review-Token": "secret"}), 404)
+        candidate = self.review.candidate("demo-1")
+        self.assertEqual(request(candidate["original"]), 403)
+        self.assertEqual(request(candidate["original"], **{"X-Review-Token": "secret"}), 200)
+        self.assertEqual(request("/api/recrop", {"person": "demo-1", "candidate": candidate["id"],
+            "sha256": candidate["sha256"], "crop": {"x": 20, "y": 20, "size": 200}},
+            **{"X-Review-Token": "secret", "Content-Type": "application/json"}), 200)
         candidate = self.review.candidate("demo-1")
         approval = {"person": "demo-1", "candidate": candidate["id"], "approved": True}
         headers = {"X-Review-Token": "secret", "Content-Type": "application/json"}

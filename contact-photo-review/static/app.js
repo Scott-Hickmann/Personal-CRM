@@ -24,7 +24,7 @@ async function work(task) {
   finally {
     busy = false;
     document.querySelectorAll('button').forEach(button => button.disabled = false);
-    $('yes').disabled = $('no').disabled = !candidate;
+    $('yes').disabled = $('no').disabled = $('adjust').disabled = !candidate;
   }
 }
 function renderPeople() {
@@ -53,7 +53,7 @@ async function queue() {
 }
 function clearPhoto() {
   candidate = null;
-  $('yes').disabled = $('no').disabled = true;
+  $('yes').disabled = $('no').disabled = $('adjust').disabled = true;
   $('photo').hidden = true;
   $('photo').removeAttribute('src');
   if (photoUrl) URL.revokeObjectURL(photoUrl);
@@ -64,26 +64,30 @@ function clearPhoto() {
   $('placeholder').textContent = 'Searching for a candidate…';
   $('more').hidden = true;
 }
+async function showPhoto(result) {
+  if (photoUrl) URL.revokeObjectURL(photoUrl);
+  const response = await fetch(result.image, { headers: { 'X-Review-Token': token } });
+  if (!response.ok) throw new Error('Could not load the candidate photo');
+  photoUrl = URL.createObjectURL(await response.blob());
+  $('photo').src = photoUrl;
+  await $('photo').decode();
+  $('photo').alt = `Unconfirmed candidate for ${current.name}`;
+  $('photo').hidden = false;
+  $('placeholder').hidden = true;
+  const source = new URL(result.source);
+  if (!['https:', 'http:'].includes(source.protocol)) throw new Error('Invalid source link');
+  $('source').href = source.href;
+  $('source').textContent = result.title || source.hostname;
+  $('source').hidden = false;
+  $('query').value = result.query;
+  candidate = result;
+}
 async function find(query) {
   clearPhoto();
   message(`Searching the web for ${current.name}…`);
   try {
     const result = await api('/api/candidate', { person: current.id, ...(query ? { query } : {}) });
-    const response = await fetch(result.image, { headers: { 'X-Review-Token': token } });
-    if (!response.ok) throw new Error('Could not load the candidate photo');
-    photoUrl = URL.createObjectURL(await response.blob());
-    $('photo').src = photoUrl;
-    await $('photo').decode();
-    $('photo').alt = `Unconfirmed candidate for ${current.name}`;
-    $('photo').hidden = false;
-    $('placeholder').hidden = true;
-    const source = new URL(result.source);
-    if (!['https:', 'http:'].includes(source.protocol)) throw new Error('Invalid source link');
-    $('source').href = source.href;
-    $('source').textContent = result.title || source.hostname;
-    $('source').hidden = false;
-    $('query').value = result.query;
-    candidate = result;
+    await showPhoto(result);
     message('Candidate ready. Confirm the person using the photo and source page.');
   } catch (error) {
     $('placeholder').textContent = 'No photo ready. Try more candidates or refine your search above.';
@@ -131,6 +135,16 @@ $('yes').onclick = () => work(async () => {
   message('Backing up the contact and saving your approved photo…');
   await api('/api/decide', { person: current.id, candidate: candidate.id, approved: true, sha256: candidate.sha256 });
   await next();
+});
+$('adjust').onclick = () => work(async () => {
+  const selected = candidate;
+  const crop = await editCrop(selected, token);
+  if (!crop) return;
+  candidate = null;
+  message('Preparing your adjusted crop…');
+  const result = await api('/api/recrop', { person: current.id, candidate: selected.id, sha256: selected.sha256, crop });
+  await showPhoto(result);
+  message('Crop updated. Review it before saving the photo to Contacts.');
 });
 $('skip').onclick = () => work(async () => { await api('/api/skip', { person: current.id }); await next(); });
 $('resume').onclick = () => work(async () => { await api('/api/resume', {}); await next(); });
