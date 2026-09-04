@@ -41,6 +41,8 @@ const MIGRATIONS: &[(i64, &str)] = &[
     ),
 ];
 
+const RELATIONSHIP_STRUCTURE_REVISION_MIGRATION: i64 = 17;
+
 pub fn open(path: &Path) -> Result<Connection> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|source| CrmError::Io {
@@ -80,6 +82,32 @@ fn migrate(connection: &Connection) -> Result<()> {
             connection.execute_batch(sql)?;
         }
     }
+    migrate_relationship_structure_revision(connection, current)?;
+    Ok(())
+}
+
+fn migrate_relationship_structure_revision(connection: &Connection, current: i64) -> Result<()> {
+    if current >= RELATIONSHIP_STRUCTURE_REVISION_MIGRATION {
+        return Ok(());
+    }
+    let transaction = immediate_transaction(connection)?;
+    let has_column = transaction
+        .prepare("PRAGMA table_info(relationships)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .iter()
+        .any(|column| column == "structure_revision");
+    if !has_column {
+        transaction.execute(
+            "ALTER TABLE relationships ADD COLUMN structure_revision INTEGER NOT NULL DEFAULT 1",
+            [],
+        )?;
+    }
+    transaction.execute(
+        "INSERT OR IGNORE INTO schema_versions(version) VALUES (?1)",
+        [RELATIONSHIP_STRUCTURE_REVISION_MIGRATION],
+    )?;
+    transaction.commit()?;
     Ok(())
 }
 
@@ -109,7 +137,7 @@ mod tests {
         let path = directory.path().join("crm.sqlite3");
         drop(open(&path).unwrap());
         let connection = open(&path).unwrap();
-        assert_eq!(schema_version(&connection).unwrap(), 16);
+        assert_eq!(schema_version(&connection).unwrap(), 17);
     }
 
     #[test]
@@ -185,7 +213,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(schema_version(&connection).unwrap(), 16);
+        assert_eq!(schema_version(&connection).unwrap(), 17);
         assert_eq!(score, None);
         assert_eq!(state, "pending");
         assert_eq!(
@@ -232,6 +260,36 @@ mod tests {
             )
             .unwrap();
         assert_eq!(relationship, ("a".into(), "b".into(), "pending".into()));
+    }
+
+    #[test]
+    fn migration_repairs_missing_relationship_structure_revision() {
+        let connection = Connection::open_in_memory().unwrap();
+        for (_, sql) in MIGRATIONS.iter().filter(|(version, _)| *version <= 14) {
+            connection.execute_batch(sql).unwrap();
+        }
+        let migration = MIGRATIONS
+            .iter()
+            .find(|(version, _)| *version == 15)
+            .unwrap()
+            .1
+            .replace("    structure_revision INTEGER NOT NULL DEFAULT 1,\n", "");
+        connection.execute_batch(&migration).unwrap();
+        connection
+            .execute_batch(MIGRATIONS.last().unwrap().1)
+            .unwrap();
+
+        migrate(&connection).unwrap();
+
+        let columns: Vec<String> = connection
+            .prepare("PRAGMA table_info(relationships)")
+            .unwrap()
+            .query_map([], |row| row.get(1))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        assert!(columns.iter().any(|column| column == "structure_revision"));
+        assert_eq!(schema_version(&connection).unwrap(), 17);
     }
 
     #[test]
