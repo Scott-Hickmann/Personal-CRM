@@ -26,8 +26,6 @@ pub struct SelfIdentity {
     #[serde(default)]
     pub apple_contact_id: Option<String>,
     #[serde(default)]
-    pub emails: Vec<String>,
-    #[serde(default)]
     pub phones: Vec<String>,
     #[serde(default)]
     pub whatsapp_ids: Vec<String>,
@@ -88,7 +86,7 @@ impl Default for MlxConfig {
 }
 
 impl Config {
-    pub fn new(name: String, emails: Vec<String>, phones: Vec<String>) -> Result<Self> {
+    pub fn new(name: String, phones: Vec<String>) -> Result<Self> {
         let name = name.trim().to_owned();
         if name.is_empty() {
             return Err(CrmError::InvalidConfig("self name cannot be empty".into()));
@@ -97,7 +95,6 @@ impl Config {
             self_identity: SelfIdentity {
                 name,
                 apple_contact_id: None,
-                emails: normalize_strings(emails),
                 phones: normalize_strings(phones),
                 whatsapp_ids: Vec::new(),
             },
@@ -198,14 +195,9 @@ mod tests {
 
     #[test]
     fn normalizes_self_identifiers() {
-        let config = Config::new(
-            " Scott Hickmann ".into(),
-            vec!["Scott@Example.com".into(), "scott@example.com".into()],
-            vec![" +1 555 123 4567 ".into()],
-        )
-        .unwrap();
+        let config =
+            Config::new(" Scott Hickmann ".into(), vec![" +1 555 123 4567 ".into()]).unwrap();
         assert_eq!(config.self_identity.name, "Scott Hickmann");
-        assert_eq!(config.self_identity.emails, ["scott@example.com"]);
         assert_eq!(config.self_identity.phones, ["+1 555 123 4567"]);
         assert_eq!(
             config.mlx.generation_model,
@@ -225,5 +217,15 @@ mod tests {
         assert_eq!(config.max_batch_tokens, 8_192);
         assert_eq!(config.embedding_batch_size, 32);
         assert_eq!(config.max_tokens, 256);
+    }
+
+    #[test]
+    fn legacy_self_email_configuration_is_ignored() {
+        let identity: SelfIdentity = toml::from_str(
+            "name = 'Alex'\nemails = ['legacy@example.com']\nphones = []\nwhatsapp_ids = []",
+        )
+        .unwrap();
+
+        assert!(!toml::to_string(&identity).unwrap().contains("emails"));
     }
 }

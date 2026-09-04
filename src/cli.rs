@@ -270,8 +270,6 @@ pub(crate) enum ConfigCommand {
 pub(crate) struct InitArgs {
     #[arg(long)]
     pub self_name: String,
-    #[arg(long = "self-email")]
-    pub self_emails: Vec<String>,
     #[arg(long = "self-phone")]
     pub self_phones: Vec<String>,
 }

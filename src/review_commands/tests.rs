@@ -30,7 +30,7 @@ fn review_refresh_resolves_candidate_from_deleted_whatsapp_chat() {
         .unwrap();
     drop(source);
     let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
-    let mut config = Config::new("Me".into(), Vec::new(), Vec::new()).unwrap();
+    let mut config = Config::new("Me".into(), Vec::new()).unwrap();
     config.paths = SourcePaths {
         whatsapp: Some(whatsapp_path.clone()),
         ..SourcePaths::default()

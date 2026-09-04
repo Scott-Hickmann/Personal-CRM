@@ -341,6 +341,20 @@ mod tests {
                 ..
             }
         ));
+
+        let alias = classify(
+            &message("alias@example.com", "Jane <jane@example.com>", vec![]),
+            &set(&["primary@example.com", "alias@example.com"]),
+            &HashSet::new(),
+        );
+        assert!(matches!(
+            alias,
+            Decision::Accept {
+                outgoing: true,
+                candidate_eligible: true,
+                ..
+            }
+        ));
     }
 
     #[test]

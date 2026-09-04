@@ -119,7 +119,7 @@ fn display_json(value: &serde_json::Value) -> String {
 }
 
 fn init(format: Format, config_path: PathBuf, args: InitArgs) -> Result<()> {
-    let config = Config::new(args.self_name, args.self_emails, args.self_phones)?;
+    let config = Config::new(args.self_name, args.self_phones)?;
     config.save_new(&config_path)?;
     let database_path = config_path
         .parent()

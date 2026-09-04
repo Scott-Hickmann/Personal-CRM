@@ -10,6 +10,8 @@ use crate::error::{CrmError, Result};
 use crate::gmail::{ApiClient, ApiResponse, Credentials, HistoryPage, Profile};
 use crate::progress::{ProgressStage, ProgressTracker};
 
+const SCHEMA_FINGERPRINT: &str = "gmail-api-v2-contact-self-identities";
+
 struct GmailSource<'a> {
     id: &'a str,
     account: &'a str,
@@ -25,6 +27,7 @@ pub fn sync(
         CrmError::InvalidConfig("Gmail credentials path is not configured".into())
     })?;
     let credentials = Credentials::load(credentials_path)?;
+    let self_addresses = self_addresses(config, crm)?;
     let account_count = config.gmail.accounts.len();
     let mut reports = Vec::with_capacity(account_count);
     for (index, account) in config.gmail.accounts.iter().enumerate() {
@@ -40,13 +43,14 @@ pub fn sync(
             false,
             "connection",
         );
-        let report = match sync_account(config, crm, &credentials, account, progress, stage) {
-            Ok(report) => report,
-            Err(error) => {
-                mark_failed(crm, account, &error.to_string());
-                return Err(error);
-            }
-        };
+        let report =
+            match sync_account(crm, &credentials, account, &self_addresses, progress, stage) {
+                Ok(report) => report,
+                Err(error) => {
+                    mark_failed(crm, account, &error.to_string());
+                    return Err(error);
+                }
+            };
         progress.event(format!(
             "Finished {account}: {} people-focused emails kept, {} excluded, {} deleted",
             report.imported, report.excluded, report.deleted
@@ -55,7 +59,7 @@ pub fn sync(
             source: format!("gmail:{account}"),
             imported: report.imported,
             deleted: report.deleted,
-            schema_fingerprint: "gmail-api-v1-people-focused".into(),
+            schema_fingerprint: SCHEMA_FINGERPRINT.into(),
             changed: report.imported > 0 || report.deleted > 0,
         });
     }
@@ -70,9 +74,9 @@ fn mark_failed(crm: &Connection, account: &str, error: &str) {
     if transaction
         .execute(
             "INSERT INTO sources(id, kind, account, schema_fingerprint, status, error)
-             VALUES (?1, 'gmail', ?2, 'gmail-api-v1-people-focused', 'failed', ?3)
+             VALUES (?1, 'gmail', ?2, ?4, 'failed', ?3)
              ON CONFLICT(id) DO UPDATE SET status='failed', error=excluded.error",
-            params![source_id, account, error],
+            params![source_id, account, error, SCHEMA_FINGERPRINT],
         )
         .is_ok()
     {
@@ -81,28 +85,44 @@ fn mark_failed(crm: &Connection, account: &str, error: &str) {
 }
 
 fn sync_account(
-    config: &crate::config::Config,
     crm: &Connection,
     credentials: &Credentials,
     account: &str,
+    self_addresses: &HashSet<String>,
     progress: &mut ProgressTracker,
     stage: ProgressStage,
 ) -> Result<AccountReport> {
     let source_id = format!("gmail:{account}");
     let client = ApiClient::for_account(credentials, account)?;
+    let previous_fingerprint: Option<String> = crm
+        .query_row(
+            "SELECT schema_fingerprint FROM sources WHERE id=?1",
+            [&source_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    if previous_fingerprint
+        .as_deref()
+        .is_some_and(|fingerprint| fingerprint != SCHEMA_FINGERPRINT)
+    {
+        gmail_backfill::reset(crm, &source_id)?;
+        progress.event(format!(
+            "Requeued Gmail history for {account} after the self-identity policy changed"
+        ));
+    }
     crm.execute(
         "INSERT INTO sources(id, kind, account, schema_fingerprint, status)
-         VALUES (?1, 'gmail', ?2, 'gmail-api-v1-people-focused', 'syncing')
+         VALUES (?1, 'gmail', ?2, ?3, 'syncing')
          ON CONFLICT(id) DO UPDATE SET account=excluded.account,
          schema_fingerprint=excluded.schema_fingerprint, status='syncing', error=NULL",
-        params![source_id, account],
+        params![source_id, account, SCHEMA_FINGERPRINT],
     )?;
     let source = GmailSource {
         id: &source_id,
         account,
         stage,
     };
-    let self_addresses = self_addresses(config);
     let known_emails = gmail_store::known_emails(crm)?;
     let pruned = gmail_store::prune_legacy_noise(crm, source.id)?;
     if pruned > 0 {
@@ -139,15 +159,23 @@ fn sync_account(
     })
 }
 
-fn self_addresses(config: &crate::config::Config) -> HashSet<String> {
-    config
-        .self_identity
-        .emails
-        .iter()
-        .chain(config.gmail.accounts.iter())
-        .map(|value| value.trim().to_ascii_lowercase())
-        .filter(|value| !value.is_empty())
-        .collect()
+fn self_addresses(config: &crate::config::Config, crm: &Connection) -> Result<HashSet<String>> {
+    let mut addresses = crate::repository::active_self_emails(crm)?;
+    if addresses.is_empty() {
+        return Err(CrmError::InvalidConfig(
+            "the linked iCloud self contact has no active email addresses; update the contact and run `crm run contacts`"
+                .into(),
+        ));
+    }
+    addresses.extend(
+        config
+            .gmail
+            .accounts
+            .iter()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .filter(|value| !value.is_empty()),
+    );
+    Ok(addresses)
 }
 
 fn sync_history(
@@ -278,6 +306,41 @@ fn set_current_cursor(crm: &Connection, client: &ApiClient, source_id: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn self_addresses_include_contact_aliases_and_authorized_accounts() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = crate::db::open(&directory.path().join("crm.sqlite3")).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state)
+                 VALUES ('self', 'Me', 'apple-self', 'active');
+                 INSERT INTO identities(
+                     id, person_id, kind, value, normalized_value, is_self, active
+                 ) VALUES ('alias', 'self', 'email', 'Alias@Example.com',
+                           'alias@example.com', 1, 1);",
+            )
+            .unwrap();
+        let mut config = crate::config::Config::new("Me".into(), Vec::new()).unwrap();
+        config.gmail.accounts = vec!["Mailbox@Example.com".into()];
+
+        assert_eq!(
+            self_addresses(&config, &connection).unwrap(),
+            HashSet::from(["alias@example.com".into(), "mailbox@example.com".into()])
+        );
+    }
+
+    #[test]
+    fn self_addresses_require_a_linked_contact_email() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = crate::db::open(&directory.path().join("crm.sqlite3")).unwrap();
+        let mut config = crate::config::Config::new("Me".into(), Vec::new()).unwrap();
+        config.gmail.accounts = vec!["mailbox@example.com".into()];
+
+        let error = self_addresses(&config, &connection).unwrap_err();
+
+        assert!(error.to_string().contains("linked iCloud self contact"));
+    }
 
     #[test]
     fn failure_is_recorded_only_for_the_current_account() {

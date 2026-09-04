@@ -68,3 +68,43 @@ fn known_scope_requeues_a_message_skipped_during_discovery() {
     let (queued, _) = queued(&connection, "gmail:test").unwrap();
     assert!(queued[0].known_scope);
 }
+
+#[test]
+fn resetting_all_requeues_every_gmail_source() {
+    let directory = tempfile::tempdir().unwrap();
+    let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
+    connection
+        .execute_batch(
+            "INSERT INTO sources(id, kind) VALUES
+             ('gmail:first', 'gmail'), ('gmail:second', 'gmail');
+             INSERT INTO gmail_sync_scopes(
+                 source_id, scope_key, kind, query, completed_at, messages_found
+             ) VALUES
+             ('gmail:first', 'one', 'discovery', 'in:sent', CURRENT_TIMESTAMP, 2),
+             ('gmail:second', 'two', 'discovery', 'in:sent', CURRENT_TIMESTAMP, 3);
+             INSERT INTO gmail_message_state(source_id, message_id, status, reason) VALUES
+             ('gmail:first', 'one', 'accepted', NULL),
+             ('gmail:second', 'two', 'skipped', 'incoming_unknown');",
+        )
+        .unwrap();
+
+    reset_all(&connection).unwrap();
+
+    let queued: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM gmail_message_state WHERE status='queued' AND reason IS NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let pending_scopes: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM gmail_sync_scopes
+             WHERE completed_at IS NULL AND page_token IS NULL AND messages_found=0",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(queued, 2);
+    assert_eq!(pending_scopes, 2);
+}

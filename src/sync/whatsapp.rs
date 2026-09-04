@@ -195,7 +195,7 @@ mod tests {
             )
             .unwrap();
         let crm = crate::db::open(&directory.path().join("crm.sqlite3")).unwrap();
-        let mut config = Config::new("Me".into(), Vec::new(), Vec::new()).unwrap();
+        let mut config = Config::new("Me".into(), Vec::new()).unwrap();
         config.paths = SourcePaths {
             whatsapp: Some(path.clone()),
             ..SourcePaths::default()

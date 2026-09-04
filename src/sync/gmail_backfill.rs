@@ -305,6 +305,22 @@ pub(super) fn reset(crm: &Connection, source_id: &str) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn reset_all(crm: &Connection) -> Result<()> {
+    let transaction = crate::db::immediate_transaction(crm)?;
+    transaction.execute(
+        "UPDATE gmail_sync_scopes SET page_token=NULL, messages_found=0,
+         completed_at=NULL, updated_at=CURRENT_TIMESTAMP",
+        [],
+    )?;
+    transaction.execute(
+        "UPDATE gmail_message_state SET status='queued', reason=NULL,
+         updated_at=CURRENT_TIMESTAMP",
+        [],
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
 pub(crate) fn has_pending(crm: &Connection) -> Result<bool> {
     crm.query_row(
         "SELECT EXISTS(

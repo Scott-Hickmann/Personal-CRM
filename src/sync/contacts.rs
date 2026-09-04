@@ -16,6 +16,7 @@ pub fn sync(
     progress: &mut ProgressTracker,
 ) -> Result<SyncReport> {
     const STAGES: u64 = 5;
+    let self_emails_before = repository::active_self_emails(crm)?;
     let configured = config
         .paths
         .contacts
@@ -152,6 +153,11 @@ pub fn sync(
     progress.progress("Finalizing contact links", 2, 4, false, "steps");
     review::enqueue_unresolved_candidates(crm)?;
     progress.progress("Finalizing contact links", 3, 4, false, "steps");
+    let self_emails_after = repository::active_self_emails(crm)?;
+    if self_emails_before != self_emails_after {
+        super::gmail_backfill::reset_all(crm)?;
+        progress.event("Requeued Gmail history after self-contact email addresses changed");
+    }
     crm.execute(
         "INSERT INTO sources(id, kind, account, schema_fingerprint, content_fingerprint, cursor,
                              status, last_sync_at, last_reconcile_at)

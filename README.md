@@ -51,10 +51,11 @@ Use `cargo test` for development. Do not use `cargo run` for commands that acces
 ```sh
 crm config init \
   --self-name "Scott Hickmann" \
-  --self-email "first@example.com" \
-  --self-email "second@example.com" \
   --self-phone "+15551234567"
 ```
+
+Self email addresses come exclusively from the linked iCloud self contact. Keep every personal,
+work, and routed address on that contact; they are not configured separately in CRM.
 
 The default configuration and CRM database live in `~/Library/Application Support/crm/`. The directory is mode `0700`; configuration and database files are mode `0600`.
 
@@ -76,7 +77,7 @@ crm auth gmail list
 crm auth gmail remove account@example.com
 ```
 
-Refresh tokens are stored in macOS Keychain, not the configuration file. Gmail access uses the read-only scope and GET requests only. Gmail is treated as relationship evidence rather than a mailbox archive: historical searches cover messages involving active iCloud-contact email addresses, while contact discovery considers only direct outgoing mail from the last two years. Discovery messages are checked as header metadata first, and bodies are retrieved only after the message qualifies. Spam, Trash, Drafts, Promotions, Social, Forums, mailing lists, automated senders, and bulk mail are excluded before storage or analysis. Unknown incoming-only senders are ignored. All configured self email addresses are treated equally, including work and personal addresses.
+Refresh tokens are stored in macOS Keychain, not the configuration file. Gmail access uses the read-only scope and GET requests only. Gmail is treated as relationship evidence rather than a mailbox archive: historical searches cover messages involving active iCloud-contact email addresses, while contact discovery considers only direct outgoing mail from the last two years. Discovery messages are checked as header metadata first, and bodies are retrieved only after the message qualifies. Spam, Trash, Drafts, Promotions, Social, Forums, mailing lists, automated senders, and bulk mail are excluded before storage or analysis. Unknown incoming-only senders are ignored. Every active email address on the linked iCloud self contact is treated as the owner, including work, personal, and routed addresses. Changes to those addresses trigger resumable Gmail reclassification.
 
 The initial people-focused backfill is checkpointed by contact search and processes at most 50 message payloads per account in each daemon job. Completed searches and messages survive sleep, network loss, and daemon restarts. The daemon interleaves additional Gmail batches with review and local analysis; subsequent mailbox updates use Gmail history rather than repeating the backfill.
 

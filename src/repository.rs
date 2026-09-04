@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use uuid::Uuid;
@@ -82,9 +84,6 @@ pub fn ensure_self(connection: &Connection, identity: &SelfIdentity) -> Result<S
          ON CONFLICT(id) DO UPDATE SET display_name = excluded.display_name, updated_at = CURRENT_TIMESTAMP",
         params![person_id, identity.name, identity.apple_contact_id],
     )?;
-    for email in &identity.emails {
-        upsert_identity(connection, &person_id, "email", email, true)?;
-    }
     for phone in &identity.phones {
         upsert_identity(connection, &person_id, "phone", phone, true)?;
     }
@@ -92,6 +91,18 @@ pub fn ensure_self(connection: &Connection, identity: &SelfIdentity) -> Result<S
         upsert_identity(connection, &person_id, "whatsapp", whatsapp, true)?;
     }
     Ok(person_id)
+}
+
+pub fn active_self_emails(connection: &Connection) -> Result<HashSet<String>> {
+    let mut statement = connection.prepare(
+        "SELECT DISTINCT lower(trim(i.normalized_value))
+         FROM identities i JOIN people p ON p.id=i.person_id
+         WHERE i.kind='email' AND i.active=1 AND i.is_self=1
+           AND p.lifecycle_state='active' AND p.apple_contact_id IS NOT NULL",
+    )?;
+    Ok(statement
+        .query_map([], |row| row.get(0))?
+        .collect::<std::result::Result<_, _>>()?)
 }
 
 pub fn resolve_person_id(connection: &Connection, reference: &str) -> Result<String> {
@@ -416,7 +427,6 @@ mod tests {
         let identity = SelfIdentity {
             name: "Alex".into(),
             apple_contact_id: Some("apple-1".into()),
-            emails: vec!["alex@example.com".into()],
             phones: Vec::new(),
             whatsapp_ids: Vec::new(),
         };
@@ -424,15 +434,32 @@ mod tests {
         let person_id = ensure_self(&connection, &identity).unwrap();
 
         assert_eq!(person_id, "canonical");
-        let owner: String = connection
-            .query_row(
-                "SELECT person_id FROM identities WHERE normalized_value='alex@example.com'
-                 AND active=1",
-                [],
-                |row| row.get(0),
+    }
+
+    #[test]
+    fn active_self_emails_come_only_from_the_linked_active_contact() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state) VALUES
+                 ('self', 'Me', 'apple-self', 'active'),
+                 ('other', 'Other', 'apple-other', 'active'),
+                 ('retired', 'Old Me', 'apple-retired', 'retired');
+                 INSERT INTO identities(
+                     id, person_id, kind, value, normalized_value, is_self, active
+                 ) VALUES
+                 ('alias', 'self', 'email', 'Alias@Example.com', 'alias@example.com', 1, 1),
+                 ('phone', 'self', 'phone', '+15550100', '15550100', 1, 1),
+                 ('other', 'other', 'email', 'other@example.com', 'other@example.com', 0, 1),
+                 ('retired', 'retired', 'email', 'old@example.com', 'old@example.com', 1, 0);",
             )
             .unwrap();
-        assert_eq!(owner, "canonical");
+
+        assert_eq!(
+            active_self_emails(&connection).unwrap(),
+            HashSet::from(["alias@example.com".into()])
+        );
     }
 
     #[test]
