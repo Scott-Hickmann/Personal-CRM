@@ -3,6 +3,8 @@ mod affinity_commands;
 mod analytics_commands;
 mod auth_commands;
 mod cli;
+mod cluster_commands;
+mod clusters;
 mod commands;
 mod config;
 mod contact_commands;

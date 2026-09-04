@@ -45,6 +45,7 @@ pub(crate) fn run(format: Format, config: Option<PathBuf>, command: Command) -> 
         Command::History(args) => crate::history_commands::run(format, config_path, args),
         Command::Explain(args) => crate::analytics_commands::explain(format, config_path, args),
         Command::Graph(args) => crate::analytics_commands::graph(format, config_path, args),
+        Command::Cluster { command } => crate::cluster_commands::run(format, &config_path, command),
         Command::Face { command } => crate::face_commands::run(format, command),
         Command::Photos { command } => crate::photos_commands::run(format, config_path, command),
         Command::Contacts { command } => crate::contact_commands::run(format, config_path, command),

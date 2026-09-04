@@ -44,6 +44,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
         include_str!("../migrations/018_deterministic_orchestration.sql"),
     ),
     (19, include_str!("../migrations/019_work_state_rows.sql")),
+    (20, include_str!("../migrations/020_network_clusters.sql")),
 ];
 
 const RELATIONSHIP_STRUCTURE_REVISION_MIGRATION: i64 = 17;
@@ -168,7 +169,7 @@ mod tests {
         let path = directory.path().join("crm.sqlite3");
         drop(open(&path).unwrap());
         let connection = open(&path).unwrap();
-        assert_eq!(schema_version(&connection).unwrap(), 19);
+        assert_eq!(schema_version(&connection).unwrap(), 20);
     }
 
     #[test]
@@ -191,7 +192,7 @@ mod tests {
         let backup_path = path.with_extension("pre-deterministic-v18.sqlite3");
         let backup = Connection::open(backup_path).unwrap();
 
-        assert_eq!(schema_version(&migrated).unwrap(), 19);
+        assert_eq!(schema_version(&migrated).unwrap(), 20);
         assert_eq!(schema_version(&backup).unwrap(), 17);
         let legacy_jobs: bool = backup
             .query_row(
@@ -269,7 +270,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(schema_version(&connection).unwrap(), 19);
+        assert_eq!(schema_version(&connection).unwrap(), 20);
         assert_eq!(score, None);
         assert_eq!(
             connection
@@ -366,7 +367,7 @@ mod tests {
             .collect::<std::result::Result<_, _>>()
             .unwrap();
         assert!(columns.iter().any(|column| column == "structure_revision"));
-        assert_eq!(schema_version(&connection).unwrap(), 19);
+        assert_eq!(schema_version(&connection).unwrap(), 20);
     }
 
     #[test]
@@ -392,6 +393,6 @@ mod tests {
             )
             .unwrap();
         assert!(!jobs_exist);
-        assert_eq!(schema_version(&connection).unwrap(), 19);
+        assert_eq!(schema_version(&connection).unwrap(), 20);
     }
 }

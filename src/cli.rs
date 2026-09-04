@@ -65,6 +65,10 @@ pub(crate) enum Command {
     History(HistoryArgs),
     Explain(PersonReference),
     Graph(GraphArgs),
+    Cluster {
+        #[command(subcommand)]
+        command: crate::cluster_commands::ClusterCommand,
+    },
     Face {
         #[command(subcommand)]
         command: FaceCommand,
