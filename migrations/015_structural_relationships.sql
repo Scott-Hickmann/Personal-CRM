@@ -8,7 +8,6 @@ CREATE TABLE conversation_memberships (
     person_id TEXT REFERENCES people(id) ON DELETE SET NULL,
     identity_value TEXT NOT NULL,
     display_name TEXT,
-    conversation_title TEXT,
     active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
     PRIMARY KEY(source_id, thread_native_id, identity_value)
 );
