@@ -19,14 +19,32 @@ import UniformTypeIdentifiers
         CGImageDestinationAddImage(destination, context.makeImage()!, [kCGImagePropertyExifDictionary: ["UserComment": "private metadata"]] as CFDictionary)
         precondition(CGImageDestinationFinalize(destination))
         let original = directory.appendingPathComponent("original.jpg")
-        let normalized = directory.appendingPathComponent("normalized.jpg")
         try (raw as Data).write(to: original)
-        try normalize(["input": original.path, "output": normalized.path])
-        let photo = try Data(contentsOf: normalized)
+        let decoded = try decodeImage(Data(contentsOf: original))
+        let crop = try faceCropRect(width: decoded.width, height: decoded.height,
+                                   faces: [CGRect(x: 0.4, y: 0.5, width: 0.2, height: 0.25)])
+        let photo = try encodeImage(decoded.cropping(to: crop)!)
         let source = CGImageSourceCreateWithData(photo as CFData, nil)!
         let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)! as NSDictionary
-        precondition(properties[kCGImagePropertyPixelWidth] as? Int == 1024)
+        precondition(properties[kCGImagePropertyPixelWidth] as? Int == 495)
+        precondition(properties[kCGImagePropertyPixelHeight] as? Int == 495)
         precondition(!(String(describing: properties).contains("private metadata")))
+        // The face is near the top; a missing Vision-to-CGImage Y flip lands at the bottom.
+        precondition(crop.minY == 178 && crop.minX == 502)
+        for box in [CGRect(x: 0, y: 0, width: 0.2, height: 0.25),
+                    CGRect(x: 0.8, y: 0.75, width: 0.2, height: 0.25)] {
+            let edge = try faceCropRect(width: 1500, height: 1200, faces: [box])
+            precondition(CGRect(x: 0, y: 0, width: 1500, height: 1200).contains(edge))
+            precondition(edge.width == edge.height)
+        }
+        for faces in [[], [CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2),
+                            CGRect(x: 0.6, y: 0.5, width: 0.2, height: 0.2)],
+                      [CGRect(x: 0.2, y: 0.2, width: 0.01, height: 0.01)]] {
+            do {
+                _ = try faceCropRect(width: 1500, height: 1200, faces: faces)
+                preconditionFailure("Ambiguous or tiny face must not be cropped")
+            } catch is Failure { }
+        }
 
         let contact = CNMutableContact()
         contact.givenName = "Test"
@@ -54,6 +72,6 @@ import UniformTypeIdentifiers
         try rejected(contact, input, Data("tampered".utf8))
         let invalid = Data("not a JPEG".utf8)
         try rejected(contact, input.merging(["sha256": digest(invalid)]) { _, new in new }, invalid)
-        print("Native tests passed: resize, metadata removal, preserved fields, existing photo, stale identity, wrong ID, tampering, invalid image.")
+        print("Native tests passed: square face framing, coordinate conversion, edge clamping, ambiguous/tiny face rejection, metadata removal, and save safeguards.")
     }
 }

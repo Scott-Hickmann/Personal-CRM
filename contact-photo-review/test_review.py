@@ -56,32 +56,63 @@ class ReviewTests(unittest.TestCase):
 
     def test_save_uses_preview_bytes_and_rejects_duplicate_submission(self):
         first = self.review.candidate("demo-1")
-        self.review.decide("demo-1", first["id"], True)
+        self.review.decide("demo-1", first["id"], True, first["sha256"])
         command, payload = self.native.calls[-1]
         self.assertEqual(command, "approve")
         self.assertEqual(payload["sha256"], hashlib.sha256(Path(payload["image"]).read_bytes()).hexdigest())
         self.assertTrue(Path(payload["backup"]).exists())
         self.assertEqual(self.review.queue()["saved"], 1)
         with self.assertRaises(ValueError):
-            self.review.decide("demo-1", first["id"], True)
+            self.review.decide("demo-1", first["id"], True, first["sha256"])
 
     def test_cannot_approve_another_contacts_candidate_or_modified_bytes(self):
         first = self.review.candidate("demo-1")
         with self.assertRaises(ValueError):
-            self.review.decide("demo-2", first["id"], True)
+            self.review.decide("demo-2", first["id"], True, first["sha256"])
         (Path(self.temp.name) / "images" / (first["id"] + ".jpg")).write_bytes(b"changed")
         with self.assertRaisesRegex(ValueError, "changed"):
-            self.review.decide("demo-1", first["id"], True)
+            self.review.decide("demo-1", first["id"], True, first["sha256"])
         self.assertFalse(any(command == "approve" for command, _ in self.native.calls))
 
     def test_failed_save_keeps_review_pending_and_records_uncertainty(self):
         first = self.review.candidate("demo-1")
         self.native.fail = True
         with self.assertRaisesRegex(ValueError, "already has a photo"):
-            self.review.decide("demo-1", first["id"], True)
+            self.review.decide("demo-1", first["id"], True, first["sha256"])
         self.assertEqual(self.review.person("demo-1")["status"], "pending")
         self.assertEqual(self.review.db.execute("SELECT state FROM approvals").fetchone()[0], "uncertain")
         self.assertEqual(self.review.queue()["saved"], 0)
+
+    def test_old_cache_is_recropped_and_stale_preview_cannot_be_saved(self):
+        first = self.review.candidate("demo-1")
+        with self.review.db:
+            self.review.db.execute("UPDATE candidates SET crop_version=0 WHERE id=?", (first["id"],))
+        with self.assertRaisesRegex(ValueError, "crop changed"):
+            self.review.decide("demo-1", first["id"], True, first["sha256"])
+        self.review.downloader = lambda _: b"new cropped image"
+        current = self.review.candidate("demo-1")
+        self.assertNotEqual(first["sha256"], current["sha256"])
+        with self.assertRaisesRegex(ValueError, "crop changed"):
+            self.review.decide("demo-1", first["id"], True, first["sha256"])
+        self.review.decide("demo-1", current["id"], True, current["sha256"])
+        self.assertEqual(self.review.queue()["saved"], 1)
+
+    def test_unusable_face_automatically_advances_to_next_candidate(self):
+        original_call = self.native.call
+        attempts = []
+
+        def normalize(command, payload):
+            if command == "normalize":
+                attempts.append(payload)
+                if len(attempts) == 1:
+                    raise ValueError("Multiple faces detected")
+            return original_call(command, payload)
+
+        self.native.call = normalize
+        current = self.review.candidate("demo-1")
+        self.assertEqual(len(attempts), 2)
+        self.assertTrue(current["sha256"])
+        self.assertEqual(self.review.db.execute("SELECT count(*) FROM candidates WHERE status='failed'").fetchone()[0], 1)
 
     def test_refresh_preserves_skips_and_removes_contacts_with_photos(self):
         self.review.skip("demo-1")
@@ -132,6 +163,11 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(request("/api/queue", **{"X-Review-Token": "secret"}), 200)
         self.assertEqual(request("/api/decide", {"approved": "false"}, **{"X-Review-Token": "secret", "Content-Type": "application/json"}), 400)
         self.assertEqual(request("/images/../../contacts.swift", **{"X-Review-Token": "secret"}), 404)
+        candidate = self.review.candidate("demo-1")
+        approval = {"person": "demo-1", "candidate": candidate["id"], "approved": True}
+        headers = {"X-Review-Token": "secret", "Content-Type": "application/json"}
+        self.assertEqual(request("/api/decide", approval, **headers), 400)
+        self.assertEqual(request("/api/decide", {**approval, "sha256": candidate["sha256"]}, **headers), 200)
 
     def test_background_crawler_discovers_candidates_for_entire_queue(self):
         crawler = Crawler(self.review)

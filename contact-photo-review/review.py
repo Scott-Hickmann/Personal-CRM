@@ -41,6 +41,9 @@ class Review:
                 candidate TEXT NOT NULL, backup TEXT NOT NULL, state TEXT NOT NULL,
                 created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, error TEXT);
         """)
+        if "crop_version" not in {row[1] for row in self.db.execute("PRAGMA table_info(candidates)")}:
+            with self.db:
+                self.db.execute("ALTER TABLE candidates ADD COLUMN crop_version INTEGER NOT NULL DEFAULT 0")
 
     def refresh(self):
         result = self.contacts.call("list", {})
@@ -86,7 +89,7 @@ class Review:
             for row in rows:
                 try:
                     path = self.directory / "images" / (row["id"] + ".jpg")
-                    if not row["hash"] or not path.exists():
+                    if not row["hash"] or not path.exists() or row["crop_version"] != 1:
                         raw = path.with_suffix(".download")
                         try:
                             raw.write_bytes(self.downloader(row["url"]))
@@ -99,15 +102,17 @@ class Review:
                         if duplicate:
                             raise ValueError("This rejected image also appeared at another URL")
                         with self.db:
-                            self.db.execute("UPDATE candidates SET hash=? WHERE id=?", (digest, row["id"]))
+                            self.db.execute("UPDATE candidates SET hash=?,crop_version=1 WHERE id=?", (digest, row["id"]))
+                    else:
+                        digest = row["hash"]
                     return {"id": row["id"], "person": person_id, "source": row["source"], "title": row["title"],
-                            "image": "/images/" + row["id"] + ".jpg", "query": person["query"]}
+                            "image": "/images/" + row["id"] + ".jpg", "query": person["query"], "sha256": digest}
                 except (ValueError, OSError, subprocess.SubprocessError) as error:
                     with self.db:
                         self.db.execute("UPDATE candidates SET status='failed',error=? WHERE id=?", (str(error), row["id"]))
                     failures += 1
                     if failures >= 4:
-                        raise ValueError("Four image hosts could not supply a usable photo. Try more candidates or refine the search.") from error
+                        raise ValueError(f"Four candidates could not supply a clear single-face photo. Last issue: {error}. Try more candidates or refine the search.") from error
             page = self.person(person_id)["page"]
             if page >= 10:
                 raise ValueError("Reached the search limit. Refine the query to find more candidates.")
@@ -120,7 +125,7 @@ class Review:
                 self.db.execute("UPDATE people SET page=page+1 WHERE id=?", (person_id,))
         raise ValueError("No new candidates on these pages. Try more candidates or refine the search.")
 
-    def decide(self, person_id, candidate_id, approved):
+    def decide(self, person_id, candidate_id, approved, expected_hash=None):
         person = self.person(person_id)
         row = self.db.execute("SELECT * FROM candidates WHERE id=? AND person=? AND status='pending' AND hash IS NOT NULL",
                               (candidate_id, person_id)).fetchone()
@@ -130,6 +135,8 @@ class Review:
             with self.db:
                 self.db.execute("UPDATE candidates SET status='rejected' WHERE id=?", (candidate_id,))
             return {"rejected": True}
+        if row["crop_version"] != 1 or expected_hash != row["hash"]:
+            raise ValueError("Photo crop changed; reload and review the current crop before saving")
         image = self.directory / "images" / (candidate_id + ".jpg")
         if hashlib.sha256(image.read_bytes()).hexdigest() != row["hash"]:
             raise ValueError("Cached photo changed; refusing to save")

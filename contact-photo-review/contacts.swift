@@ -42,8 +42,7 @@ func fetch(_ store: CNContactStore, id: String? = nil, backup: Bool = false) thr
     return records
 }
 
-func normalize(_ input: [String: String]) throws {
-    let data = try Data(contentsOf: URL(fileURLWithPath: input["input"] ?? ""))
+func decodeImage(_ data: Data) throws -> CGImage {
     try require(data.count <= 10_000_000, "Image exceeds 10 MB")
     guard let source = CGImageSourceCreateWithData(data as CFData, nil),
           let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
@@ -54,18 +53,28 @@ func normalize(_ input: [String: String]) throws {
     try require(width >= 96 && height >= 96 && width <= 20000 && height <= 20000 && width * height <= 40_000_000,
                 "Image dimensions must be at least 96 px and at most 40 megapixels")
     let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
-        kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceThumbnailMaxPixelSize: 1024]
+        kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceThumbnailMaxPixelSize: 2048]
     guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
         throw Failure(message: "Cannot decode image")
     }
+    return image
+}
+
+func encodeImage(_ image: CGImage) throws -> Data {
     let output = NSMutableData()
     guard let destination = CGImageDestinationCreateWithData(output, UTType.jpeg.identifier as CFString, 1, nil) else {
         throw Failure(message: "Cannot encode image")
     }
     CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary)
     try require(CGImageDestinationFinalize(destination), "Cannot finish image")
-    try (output as Data).write(to: URL(fileURLWithPath: input["output"] ?? ""), options: .atomic)
-    try emit(["sha256": digest(output as Data)])
+    return output as Data
+}
+
+func normalize(_ input: [String: String]) throws {
+    let data = try Data(contentsOf: URL(fileURLWithPath: input["input"] ?? ""))
+    let output = try encodeImage(cropFace(decodeImage(data)))
+    try output.write(to: URL(fileURLWithPath: input["output"] ?? ""), options: .atomic)
+    try emit(["sha256": digest(output)])
 }
 
 func prepareApproval(_ contact: CNContact, _ input: [String: String], _ data: Data) throws -> CNMutableContact {

@@ -33,12 +33,16 @@ can run. Use the complete session link printed in the terminal when reopening.
 1. Click **Load contacts**. Only cards without photos enter the review queue.
 2. A background crawler discovers candidates for the entire queue, searching
    Bing with each person's name and organization. Photos download on selection.
-3. Review the candidate and its linked source page. Names alone are not proof
-   of identity; this app does not perform face recognition.
+3. Review the automatically cropped face and its linked source page. Cropping runs
+   locally using Apple Vision, producing a tight square with space for hair and
+   ears. Photos with no detected face, multiple faces, or a face too small for a
+   clear crop are skipped automatically. Names alone are not proof of identity;
+   face detection frames the photo but does not identify the person.
 4. **No, find another** permanently rejects that candidate and fetches the next.
    Identical rejected image bytes at different URLs are also skipped.
 5. **Yes, save photo** backs up that contact, adds the exact reviewed image through
-   Apple's Contacts framework, then moves to the next contact.
+   Apple's Contacts framework, then moves to the next contact. The saved crop is
+   exactly the one you reviewed; older cached photos are reprocessed before review.
 6. Refine a search with a company or other useful context, or skip a contact.
    **Bring back skipped contacts** resumes skipped cards. **Refresh contacts**
    reconciles the queue with Apple Contacts and retries background discovery.
@@ -81,12 +85,14 @@ its photo. Approved image files remain available in the local cache.
 ```sh
 cd contact-photo-review
 python3 -m unittest -v
-swiftc -parse-as-library -D PHOTO_REVIEW_TESTS contacts.swift test_contacts.swift \
-  -o .local/native-tests -framework Contacts -framework ImageIO -framework UniformTypeIdentifiers
+swiftc -parse-as-library -D PHOTO_REVIEW_TESTS contacts.swift face_crop.swift test_contacts.swift \
+  -o .local/native-tests -framework Contacts -framework Vision -framework ImageIO -framework UniformTypeIdentifiers
 .local/native-tests
 ```
 
 Tests use fake contacts and cover rejection persistence, exact-photo approvals,
 stale/cross-contact submissions, failed saves, queue reconciliation, pagination,
 rejected-image deduplication, API authorization, and unsafe download destinations.
+Crop tests cover square framing, coordinate conversion, edge placement, ambiguous
+faces, cache upgrades, and refusing approval from a stale crop preview.
 `--demo` exercises the UI without requesting Contacts access or saving real photos.

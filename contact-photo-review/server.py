@@ -101,7 +101,7 @@ def handler(review, token, crawler=None):
                     elif path == "/api/decide":
                         if type(body.get("approved")) is not bool:
                             raise ValueError("Approval must be explicitly true or false")
-                        result = review.decide(str(body["person"]), str(body["candidate"]), body["approved"])
+                        result = review.decide(str(body["person"]), str(body["candidate"]), body["approved"], body.get("sha256"))
                     elif path == "/api/skip":
                         result = review.skip(str(body["person"]))
                     elif path == "/api/resume":

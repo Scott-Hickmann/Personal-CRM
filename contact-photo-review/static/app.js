@@ -129,7 +129,7 @@ $('no').onclick = () => work(async () => {
 });
 $('yes').onclick = () => work(async () => {
   message('Backing up the contact and saving your approved photo…');
-  await api('/api/decide', { person: current.id, candidate: candidate.id, approved: true });
+  await api('/api/decide', { person: current.id, candidate: candidate.id, approved: true, sha256: candidate.sha256 });
   await next();
 });
 $('skip').onclick = () => work(async () => { await api('/api/skip', { person: current.id }); await next(); });
