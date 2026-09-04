@@ -131,7 +131,7 @@ crm review
 crm stop
 ```
 
-`crm status` reports daemon and source health, persisted work, dirty people awaiting scoring, reviews, active contacts, and interactions. `crm status --live` refreshes those totals every half second while retaining active progress, source status, and recent activity. Message bodies are never written to live-status telemetry.
+`crm status` reports daemon and source health, every persisted work row, trigger reasons, generations, retry state, pending order, dirty sets, reviews, active contacts, and interactions. `crm status --live` refreshes every half second and renders the serial coordinator as a stable pipeline map. It highlights the current resumable source phase (`import`, `relationships`, or `dirty_people`), detailed operation progress, queued reruns, downstream paths, telemetry freshness, and recent phase transitions. The compact view keeps the pipeline visible in an 80×24 terminal. Message bodies are never written to live-status telemetry.
 
 ## Local web companion
 
