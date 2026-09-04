@@ -27,6 +27,7 @@ pub(super) fn seed(
     crm: &Connection,
     source_id: &str,
     self_addresses: &HashSet<String>,
+    ignored_domains: &[String],
 ) -> Result<()> {
     let mut statement = crm.prepare(
         "SELECT DISTINCT lower(trim(i.normalized_value))
@@ -42,7 +43,11 @@ pub(super) fn seed(
 
     let active_keys: HashSet<String> = emails
         .iter()
-        .filter(|email| email.contains('@') && !self_addresses.contains(*email))
+        .filter(|email| {
+            email.contains('@')
+                && !self_addresses.contains(*email)
+                && !crate::config::email_domain_is_ignored(email, ignored_domains)
+        })
         .map(|email| contact_scope_key(email))
         .collect();
     let mut old_statement = crm.prepare(
@@ -65,7 +70,10 @@ pub(super) fn seed(
     }
 
     for email in emails {
-        if !email.contains('@') || self_addresses.contains(&email) {
+        if !email.contains('@')
+            || self_addresses.contains(&email)
+            || crate::config::email_domain_is_ignored(&email, ignored_domains)
+        {
             continue;
         }
         let query = format!(

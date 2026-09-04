@@ -34,6 +34,8 @@ pub struct GmailConfig {
     pub credentials_path: Option<PathBuf>,
     #[serde(default)]
     pub accounts: Vec<String>,
+    #[serde(default)]
+    pub ignored_domains: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -83,7 +85,10 @@ impl Config {
             path: path.to_owned(),
             source,
         })?;
-        toml::from_str(&text).map_err(|error| CrmError::InvalidConfig(error.to_string()))
+        let mut config: Self =
+            toml::from_str(&text).map_err(|error| CrmError::InvalidConfig(error.to_string()))?;
+        config.gmail.ignored_domains = normalize_domains(config.gmail.ignored_domains);
+        Ok(config)
     }
 
     pub fn save_new(&self, path: &Path) -> Result<()> {
@@ -120,6 +125,21 @@ impl Config {
             }
         })
     }
+}
+
+pub(crate) fn email_domain_is_ignored(email: &str, ignored_domains: &[String]) -> bool {
+    let email = email.trim().to_ascii_lowercase();
+    let Some((_, domain)) = email.rsplit_once('@') else {
+        return false;
+    };
+    let domain = domain.trim_end_matches('.');
+    ignored_domains.iter().any(|ignored| {
+        let ignored = ignored.trim().trim_end_matches('.').to_ascii_lowercase();
+        domain == ignored
+            || domain
+                .strip_suffix(&ignored)
+                .is_some_and(|prefix| prefix.ends_with('.'))
+    })
 }
 
 impl SourcePaths {
@@ -162,6 +182,15 @@ fn normalize_strings(values: Vec<String>) -> Vec<String> {
     values
 }
 
+fn normalize_domains(values: Vec<String>) -> Vec<String> {
+    normalize_strings(
+        values
+            .into_iter()
+            .map(|value| value.trim().trim_end_matches('.').to_owned())
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,5 +211,45 @@ mod tests {
         .unwrap();
 
         assert!(!toml::to_string(&identity).unwrap().contains("emails"));
+    }
+
+    #[test]
+    fn ignored_gmail_domains_match_exact_domains_and_subdomains() {
+        let gmail = GmailConfig {
+            ignored_domains: vec!["lists.stanford.edu".into()],
+            ..GmailConfig::default()
+        };
+
+        assert!(email_domain_is_ignored(
+            "group@lists.stanford.edu",
+            &gmail.ignored_domains
+        ));
+        assert!(email_domain_is_ignored(
+            "group@dept.lists.stanford.edu",
+            &gmail.ignored_domains
+        ));
+        assert!(!email_domain_is_ignored(
+            "person@stanford.edu",
+            &gmail.ignored_domains
+        ));
+        assert!(!email_domain_is_ignored(
+            "group@notlists.stanford.edu",
+            &gmail.ignored_domains
+        ));
+    }
+
+    #[test]
+    fn loading_normalizes_ignored_gmail_domains() {
+        let config: Config = toml::from_str(
+            "[self_identity]\nname='Alex'\nphones=[]\nwhatsapp_ids=[]\n\n[gmail]\nignored_domains=[' Lists.Stanford.EDU. ', 'lists.stanford.edu']",
+        )
+        .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        config.save_new(&path).unwrap();
+
+        let loaded = Config::load(&path).unwrap();
+
+        assert_eq!(loaded.gmail.ignored_domains, ["lists.stanford.edu"]);
     }
 }

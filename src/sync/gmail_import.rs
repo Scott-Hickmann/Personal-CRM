@@ -25,6 +25,7 @@ pub(super) struct ImportContext<'a> {
     pub account: &'a str,
     pub self_addresses: &'a HashSet<String>,
     pub known_emails: &'a HashSet<String>,
+    pub ignored_domains: &'a [String],
     pub stage: ProgressStage,
 }
 
@@ -79,6 +80,7 @@ pub(super) fn process_queue(
             queued.known_scope,
             context.self_addresses,
             context.known_emails,
+            context.ignored_domains,
         )?;
         progress.focus_now([gmail_focus(context.account, &queued.id, &prepared)]);
         let transaction = crate::db::immediate_transaction(crm)?;
@@ -184,13 +186,14 @@ fn prepare_message(
     known_scope: bool,
     self_addresses: &HashSet<String>,
     known_emails: &HashSet<String>,
+    ignored_domains: &[String],
 ) -> Result<PreparedMessage> {
     let format = if known_scope { "FULL" } else { "METADATA" };
     let message: GmailMessage = match client.get(&format!("messages/{id}?format={format}"))? {
         ApiResponse::NotFound => return Ok(PreparedMessage::Deleted),
         ApiResponse::Data(message) => message,
     };
-    match classify(&message, self_addresses, known_emails) {
+    match classify(&message, self_addresses, known_emails, ignored_domains) {
         Decision::Skip(reason) => Ok(PreparedMessage::Skip(reason)),
         Decision::Accept {
             outgoing,
@@ -219,6 +222,7 @@ fn classify(
     message: &GmailMessage,
     self_addresses: &HashSet<String>,
     known_emails: &HashSet<String>,
+    ignored_domains: &[String],
 ) -> Decision {
     let from = header(message, "From").unwrap_or_default();
     let from_addresses: HashSet<_> = addresses(&from).into_iter().collect();
@@ -252,6 +256,12 @@ fn classify(
     if participants.is_empty() {
         return Decision::Skip("no_external_person");
     }
+    if participants
+        .keys()
+        .any(|email| crate::config::email_domain_is_ignored(email, ignored_domains))
+    {
+        return Decision::Skip("ignored_domain");
+    }
     let has_known_person = participants
         .keys()
         .any(|email| known_emails.contains(email));
@@ -280,125 +290,5 @@ fn classify(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::gmail::MessagePart;
-    use crate::gmail::api::{Header, MessageBody};
-
-    fn message(from: &str, to: &str, labels: Vec<&str>) -> GmailMessage {
-        GmailMessage {
-            id: "message".into(),
-            thread_id: "thread".into(),
-            label_ids: labels.into_iter().map(str::to_owned).collect(),
-            internal_date: "0".into(),
-            payload: MessagePart {
-                mime_type: "text/plain".into(),
-                filename: String::new(),
-                headers: vec![
-                    Header {
-                        name: "From".into(),
-                        value: from.into(),
-                    },
-                    Header {
-                        name: "To".into(),
-                        value: to.into(),
-                    },
-                ],
-                body: MessageBody::default(),
-                parts: vec![],
-            },
-        }
-    }
-
-    fn set(values: &[&str]) -> HashSet<String> {
-        values.iter().map(|value| (*value).to_owned()).collect()
-    }
-
-    #[test]
-    fn accepts_known_people_and_direct_outgoing_discovery() {
-        let known = classify(
-            &message("Alex <alex@example.com>", "me@example.com", vec![]),
-            &set(&["me@example.com"]),
-            &set(&["alex@example.com"]),
-        );
-        assert!(matches!(
-            known,
-            Decision::Accept {
-                candidate_eligible: false,
-                ..
-            }
-        ));
-
-        let discovery = classify(
-            &message("me@example.com", "Jane <jane@example.com>", vec![]),
-            &set(&["me@example.com"]),
-            &HashSet::new(),
-        );
-        assert!(matches!(
-            discovery,
-            Decision::Accept {
-                candidate_eligible: true,
-                ..
-            }
-        ));
-
-        let alias = classify(
-            &message("alias@example.com", "Jane <jane@example.com>", vec![]),
-            &set(&["primary@example.com", "alias@example.com"]),
-            &HashSet::new(),
-        );
-        assert!(matches!(
-            alias,
-            Decision::Accept {
-                outgoing: true,
-                candidate_eligible: true,
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn rejects_unknown_incoming_and_marketing_to_known_people() {
-        let unknown = classify(
-            &message("stranger@example.com", "me@example.com", vec![]),
-            &set(&["me@example.com"]),
-            &HashSet::new(),
-        );
-        assert!(matches!(unknown, Decision::Skip("incoming_unknown")));
-
-        let marketing = classify(
-            &message(
-                "Alex <alex@example.com>",
-                "me@example.com",
-                vec!["CATEGORY_PROMOTIONS"],
-            ),
-            &set(&["me@example.com"]),
-            &set(&["alex@example.com"]),
-        );
-        assert!(matches!(marketing, Decision::Skip("automated_or_bulk")));
-    }
-
-    #[test]
-    fn explicit_icloud_identity_wins_over_a_shared_mailbox_name() {
-        let known = classify(
-            &message("Support <support@example.com>", "me@example.com", vec![]),
-            &set(&["me@example.com"]),
-            &set(&["support@example.com"]),
-        );
-        assert!(matches!(known, Decision::Accept { .. }));
-    }
-
-    #[test]
-    fn rejects_mass_outgoing_mail_without_a_known_person() {
-        let recipients = (0..6)
-            .map(|index| format!("person{index}@example.com"))
-            .collect::<Vec<_>>()
-            .join(",");
-        let decision = classify(
-            &message("me@example.com", &recipients, vec![]),
-            &set(&["me@example.com"]),
-            &HashSet::new(),
-        );
-        assert!(matches!(decision, Decision::Skip("not_a_direct_person")));
-    }
-}
+#[path = "gmail_import_tests.rs"]
+mod tests;

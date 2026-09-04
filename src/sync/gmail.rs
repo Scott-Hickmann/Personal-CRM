@@ -10,12 +10,17 @@ use crate::error::{CrmError, Result};
 use crate::gmail::{ApiClient, ApiResponse, Credentials, HistoryPage, Profile};
 use crate::progress::{ProgressStage, ProgressTracker};
 
-const SCHEMA_FINGERPRINT: &str = "gmail-api-v2-contact-self-identities";
+const POLICY_FINGERPRINT: &str = "gmail-api-v3-domain-ignore";
 
 struct GmailSource<'a> {
     id: &'a str,
     account: &'a str,
     stage: ProgressStage,
+}
+
+struct GmailPolicy<'a> {
+    ignored_domains: &'a [String],
+    fingerprint: String,
 }
 
 pub fn sync(
@@ -28,6 +33,10 @@ pub fn sync(
     })?;
     let credentials = Credentials::load(credentials_path)?;
     let self_addresses = self_addresses(config, crm)?;
+    let policy = GmailPolicy {
+        ignored_domains: &config.gmail.ignored_domains,
+        fingerprint: policy_fingerprint(config),
+    };
     let account_count = config.gmail.accounts.len();
     let mut reports = Vec::with_capacity(account_count);
     for (index, account) in config.gmail.accounts.iter().enumerate() {
@@ -43,14 +52,21 @@ pub fn sync(
             false,
             "connection",
         );
-        let report =
-            match sync_account(crm, &credentials, account, &self_addresses, progress, stage) {
-                Ok(report) => report,
-                Err(error) => {
-                    mark_failed(crm, account, &error.to_string());
-                    return Err(error);
-                }
-            };
+        let report = match sync_account(
+            crm,
+            &credentials,
+            account,
+            &self_addresses,
+            &policy,
+            progress,
+            stage,
+        ) {
+            Ok(report) => report,
+            Err(error) => {
+                mark_failed(crm, account, &policy.fingerprint, &error.to_string());
+                return Err(error);
+            }
+        };
         progress.event(format!(
             "Finished {account}: {} people-focused emails kept, {} excluded, {} deleted",
             report.imported, report.excluded, report.deleted
@@ -59,14 +75,14 @@ pub fn sync(
             source: format!("gmail:{account}"),
             imported: report.imported,
             deleted: report.deleted,
-            schema_fingerprint: SCHEMA_FINGERPRINT.into(),
+            schema_fingerprint: policy.fingerprint.clone(),
             changed: report.imported > 0 || report.deleted > 0,
         });
     }
     Ok(reports)
 }
 
-fn mark_failed(crm: &Connection, account: &str, error: &str) {
+fn mark_failed(crm: &Connection, account: &str, policy_fingerprint: &str, error: &str) {
     let source_id = format!("gmail:{account}");
     let Ok(transaction) = crate::db::immediate_transaction(crm) else {
         return;
@@ -76,7 +92,7 @@ fn mark_failed(crm: &Connection, account: &str, error: &str) {
             "INSERT INTO sources(id, kind, account, schema_fingerprint, status, error)
              VALUES (?1, 'gmail', ?2, ?4, 'failed', ?3)
              ON CONFLICT(id) DO UPDATE SET status='failed', error=excluded.error",
-            params![source_id, account, error, SCHEMA_FINGERPRINT],
+            params![source_id, account, error, policy_fingerprint],
         )
         .is_ok()
     {
@@ -89,6 +105,7 @@ fn sync_account(
     credentials: &Credentials,
     account: &str,
     self_addresses: &HashSet<String>,
+    policy: &GmailPolicy<'_>,
     progress: &mut ProgressTracker,
     stage: ProgressStage,
 ) -> Result<AccountReport> {
@@ -104,11 +121,11 @@ fn sync_account(
         .flatten();
     if previous_fingerprint
         .as_deref()
-        .is_some_and(|fingerprint| fingerprint != SCHEMA_FINGERPRINT)
+        .is_some_and(|fingerprint| fingerprint != policy.fingerprint)
     {
         gmail_backfill::reset(crm, &source_id)?;
         progress.event(format!(
-            "Requeued Gmail history for {account} after the self-identity policy changed"
+            "Requeued Gmail history for {account} after the Gmail policy changed"
         ));
     }
     crm.execute(
@@ -116,7 +133,7 @@ fn sync_account(
          VALUES (?1, 'gmail', ?2, ?3, 'syncing')
          ON CONFLICT(id) DO UPDATE SET account=excluded.account,
          schema_fingerprint=excluded.schema_fingerprint, status='syncing', error=NULL",
-        params![source_id, account, SCHEMA_FINGERPRINT],
+        params![source_id, account, policy.fingerprint],
     )?;
     let source = GmailSource {
         id: &source_id,
@@ -130,7 +147,13 @@ fn sync_account(
             "Excluded {pruned} legacy non-person Gmail interactions"
         ));
     }
-    gmail_backfill::seed(crm, source.id, &self_addresses)?;
+    let ignored = gmail_store::prune_ignored_domains(crm, source.id, policy.ignored_domains)?;
+    if ignored > 0 {
+        progress.event(format!(
+            "Excluded {ignored} Gmail interactions from ignored domains"
+        ));
+    }
+    gmail_backfill::seed(crm, source.id, self_addresses, policy.ignored_domains)?;
     sync_history(crm, &client, &source, progress)?;
     let scan = gmail_backfill::scan(crm, &client, source.id, account, stage, progress)?;
     if scan.pages > 0 {
@@ -142,8 +165,9 @@ fn sync_account(
     let import_context = gmail_import::ImportContext {
         source_id: source.id,
         account,
-        self_addresses: &self_addresses,
+        self_addresses,
         known_emails: &known_emails,
+        ignored_domains: policy.ignored_domains,
         stage,
     };
     let processed = gmail_import::process_queue(crm, &client, &import_context, progress)?;
@@ -154,9 +178,22 @@ fn sync_account(
     )?;
     Ok(AccountReport {
         imported: processed.imported,
-        excluded: processed.skipped + pruned,
-        deleted: processed.deleted,
+        excluded: processed.skipped + pruned + ignored,
+        deleted: processed.deleted + pruned + ignored,
     })
+}
+
+fn policy_fingerprint(config: &crate::config::Config) -> String {
+    let mut domains = config
+        .gmail
+        .ignored_domains
+        .iter()
+        .map(|domain| domain.trim().to_ascii_lowercase())
+        .filter(|domain| !domain.is_empty())
+        .collect::<Vec<_>>();
+    domains.sort();
+    domains.dedup();
+    format!("{POLICY_FINGERPRINT}:{}", domains.join(","))
 }
 
 fn self_addresses(config: &crate::config::Config, crm: &Connection) -> Result<HashSet<String>> {
@@ -304,76 +341,8 @@ fn set_current_cursor(crm: &Connection, client: &ApiClient, source_id: &str) -> 
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn self_addresses_include_contact_aliases_and_authorized_accounts() {
-        let directory = tempfile::tempdir().unwrap();
-        let connection = crate::db::open(&directory.path().join("crm.sqlite3")).unwrap();
-        connection
-            .execute_batch(
-                "INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state)
-                 VALUES ('self', 'Me', 'apple-self', 'active');
-                 INSERT INTO identities(
-                     id, person_id, kind, value, normalized_value, is_self, active
-                 ) VALUES ('alias', 'self', 'email', 'Alias@Example.com',
-                           'alias@example.com', 1, 1);",
-            )
-            .unwrap();
-        let mut config = crate::config::Config::new("Me".into(), Vec::new()).unwrap();
-        config.gmail.accounts = vec!["Mailbox@Example.com".into()];
-
-        assert_eq!(
-            self_addresses(&config, &connection).unwrap(),
-            HashSet::from(["alias@example.com".into(), "mailbox@example.com".into()])
-        );
-    }
-
-    #[test]
-    fn self_addresses_require_a_linked_contact_email() {
-        let directory = tempfile::tempdir().unwrap();
-        let connection = crate::db::open(&directory.path().join("crm.sqlite3")).unwrap();
-        let mut config = crate::config::Config::new("Me".into(), Vec::new()).unwrap();
-        config.gmail.accounts = vec!["mailbox@example.com".into()];
-
-        let error = self_addresses(&config, &connection).unwrap_err();
-
-        assert!(error.to_string().contains("linked iCloud self contact"));
-    }
-
-    #[test]
-    fn failure_is_recorded_only_for_the_current_account() {
-        let directory = tempfile::tempdir().unwrap();
-        let connection = crate::db::open(&directory.path().join("crm.sqlite3")).unwrap();
-        connection
-            .execute_batch(
-                "INSERT INTO sources(id, kind, account, status) VALUES
-                 ('gmail:first@example.com', 'gmail', 'first@example.com', 'ok'),
-                 ('gmail:second@example.com', 'gmail', 'second@example.com', 'ok');",
-            )
-            .unwrap();
-
-        mark_failed(&connection, "first@example.com", "database is locked");
-
-        let first: (String, Option<String>) = connection
-            .query_row(
-                "SELECT status, error FROM sources WHERE id='gmail:first@example.com'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        let second: (String, Option<String>) = connection
-            .query_row(
-                "SELECT status, error FROM sources WHERE id='gmail:second@example.com'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(first, ("failed".into(), Some("database is locked".into())));
-        assert_eq!(second, ("ok".into(), None));
-    }
-}
+#[path = "gmail_tests.rs"]
+mod tests;
 
 #[derive(Debug, Default)]
 struct AccountReport {

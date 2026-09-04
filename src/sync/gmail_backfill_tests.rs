@@ -10,14 +10,23 @@ fn seeds_only_active_icloud_email_scopes() {
             "INSERT INTO sources(id, kind) VALUES ('gmail:test', 'gmail');
              INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state)
              VALUES ('active', 'Active', 'apple-1', 'active'),
+                    ('ignored', 'List', 'apple-list', 'active'),
                     ('retired', 'Retired', 'apple-2', 'retired');
              INSERT INTO identities(id, person_id, kind, value, normalized_value, active)
              VALUES ('a', 'active', 'email', 'active@example.com', 'active@example.com', 1),
+                    ('i', 'ignored', 'email', 'group@lists.stanford.edu',
+                     'group@lists.stanford.edu', 1),
                     ('r', 'retired', 'email', 'retired@example.com', 'retired@example.com', 0);",
         )
         .unwrap();
 
-    seed(&connection, "gmail:test", &HashSet::new()).unwrap();
+    seed(
+        &connection,
+        "gmail:test",
+        &HashSet::new(),
+        &["lists.stanford.edu".into()],
+    )
+    .unwrap();
 
     let scopes: Vec<String> = connection
         .prepare("SELECT scope_key FROM gmail_sync_scopes ORDER BY scope_key")
@@ -33,6 +42,11 @@ fn seeds_only_active_icloud_email_scopes() {
             .any(|scope| scope.contains("active@example.com"))
     );
     assert!(scopes.iter().any(|scope| scope.contains("discovery")));
+    assert!(
+        !scopes
+            .iter()
+            .any(|scope| scope.contains("lists.stanford.edu"))
+    );
 }
 
 #[test]
