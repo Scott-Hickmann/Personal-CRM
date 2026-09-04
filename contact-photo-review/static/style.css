@@ -1,0 +1,77 @@
+:root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#253d35;background:#f6f5ef;font-synthesis:none}
+*{box-sizing:border-box}
+body{margin:0}
+button,input{font:inherit}
+button{border:1px solid #cbd1c8;border-radius:8px;padding:11px 16px;background:#fffdf8;color:inherit;cursor:pointer;font-size:13px;font-weight:600}
+button:hover{background:#e9ede3}
+button:disabled{opacity:.42;cursor:default}
+button:focus-visible,input:focus-visible,a:focus-visible{outline:3px solid #bd913c;outline-offset:3px}
+.primary{background:#284f3f;color:white;border-color:#284f3f}
+.primary:hover{background:#34674f}
+.text{border:0;background:transparent;padding:8px 0;color:#62766c;text-align:left}
+header{height:70px;margin:0 5vw;border-bottom:1px solid #d8ddd3;display:flex;align-items:center;gap:20px}
+.brand{font-size:25px;text-decoration:none;color:inherit;display:flex;align-items:center;gap:12px}
+.brand span{font-size:18px;font-weight:650;letter-spacing:-.5px}
+.local{margin-left:auto;font-size:10px;letter-spacing:1.5px;color:#718074}
+main{display:grid;grid-template-columns:285px minmax(0,1fr);max-width:1250px;margin:0 auto;padding:28px 35px;gap:55px}
+aside{padding:16px 30px 0 0;border-right:1px solid #d8ddd3}
+.eyebrow{font-size:10px;letter-spacing:1.7px;color:#7a8879;font-weight:650}
+h1{font-family:Georgia,serif;font-size:42px;line-height:1.12;letter-spacing:-1.7px;font-weight:400;margin:18px 0}
+p{line-height:1.65}
+.intro{font-size:13px;color:#788174}
+.stats{margin:30px 0;display:grid;grid-template-columns:55px 1fr;gap:14px 8px;align-items:center}
+.stats strong{font:32px Georgia,serif}
+.stats span{font-size:12px;color:#718074}
+label{font-size:11px;font-weight:600;display:block;margin-bottom:8px}
+input{width:100%;border:1px solid #d4d9d0;border-radius:7px;background:#fffdf8;padding:11px;color:#304b3c;font-size:13px}
+#people{max-height:320px;overflow:auto;margin:15px 0}
+#people button{display:block;width:100%;text-align:left;background:transparent;border:0;font-weight:500;margin-bottom:3px;padding:11px}
+#people button.active{background:#e3e9dc;color:#244d39}
+#people small{display:block;font-size:11px;color:#798375;font-weight:400;margin-top:4px}
+#resume{font-size:11px}
+.workspace{min-width:0}
+#message{font-size:12px;color:#657a69;min-height:36px;line-height:1.5;margin-bottom:12px}
+#message.error{color:#a34232}
+#empty{text-align:center;padding:95px 0}
+.empty-icon{font-size:75px;color:#8e9f82}
+h2{font-family:Georgia,serif;font-size:31px;font-weight:400;letter-spacing:-.7px;margin:9px 0}
+#empty p{color:#718074;font-size:14px}
+.review-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
+#details{font-size:12px;color:#778372;margin:6px 0 20px}
+#search{margin:5px 0 21px}
+.search-row{display:flex;gap:8px}
+.photo-area{height:280px;background:#e9ede3;border:1px solid #d9dfd2;border-radius:12px;display:flex;align-items:center;justify-content:center;overflow:hidden}
+#photo{height:100%;width:100%;object-fit:contain}
+#placeholder{font-size:13px;color:#7d8b75;text-align:center;padding:30px}
+.source{display:flex;gap:12px;font-size:11px;align-items:center;margin:12px 0 16px;min-height:17px}
+.source span{font-size:9px;letter-spacing:1px;color:#84917d;white-space:nowrap}
+.source a{color:#587458;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.decision{display:flex;justify-content:space-between;align-items:center;gap:15px;border-top:1px solid #d7dfcf;padding-top:16px}
+h3{font-size:15px;font-weight:600;margin:0}
+.decision p{font-size:11px;color:#83907b;margin:7px 0}
+.actions{display:flex;gap:8px;flex-wrap:wrap}
+.fine{font-size:10px!important;color:#87917f!important;line-height:1.8;margin-top:23px}
+footer{border-top:1px solid #d8ddd3;margin:10px 5vw;padding:20px 0;color:#8a9583;font-size:11px}
+#demo{background:#e7dfbc;text-align:center;font-size:12px;padding:10px}
+[hidden]{display:none!important}
+@media(max-width:900px){main{gap:25px;padding:25px;grid-template-columns:220px minmax(0,1fr)}
+aside{padding-right:20px}
+h1{font-size:34px}
+.decision{align-items:flex-start;flex-direction:column}
+}
+@media(max-width:650px){header{height:70px;margin:0 20px}
+.local{display:none}
+header button{margin-left:auto}
+main{display:block;padding:20px}
+aside{border:0;padding:0}
+aside h1,aside .intro,aside>.eyebrow{display:none}
+.stats{margin:5px 0 18px;grid-template-columns:35px 1fr 35px 1fr}
+.stats strong{font-size:25px}
+#people{max-height:130px}
+#resume{margin-bottom:12px}
+.photo-area{height:310px}
+.source{margin-bottom:18px}
+.review-heading{align-items:flex-start}
+h2{font-size:28px}
+#empty{padding:30px 0}
+}
