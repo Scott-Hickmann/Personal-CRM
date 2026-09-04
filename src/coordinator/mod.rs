@@ -1,13 +1,15 @@
+mod lock;
 mod runner;
 
-use std::fs::{self, OpenOptions};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use chrono::{Duration, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
 use crate::error::{CrmError, Result};
+
+pub(crate) use lock::WriterLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -144,50 +146,6 @@ pub(crate) fn run_now(config_path: &Path, kind: WorkKind) -> Result<()> {
     }
 }
 
-pub(crate) struct WriterLock(PathBuf);
-
-impl WriterLock {
-    pub(crate) fn acquire(directory: &Path) -> Result<Self> {
-        let path = directory.join("coordinator.lock");
-        if let Ok(pid) = fs::read_to_string(&path) {
-            let alive = pid
-                .trim()
-                .parse()
-                .is_ok_and(crate::daemon::process_is_running);
-            if alive {
-                return Err(CrmError::InvalidConfig(format!(
-                    "CRM coordinator is already running as PID {}",
-                    pid.trim()
-                )));
-            }
-            fs::remove_file(&path).map_err(|source| CrmError::Io {
-                path: path.clone(),
-                source,
-            })?;
-        }
-        use std::io::Write;
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .map_err(|source| CrmError::Io {
-                path: path.clone(),
-                source,
-            })?;
-        writeln!(file, "{}", std::process::id()).map_err(|source| CrmError::Io {
-            path: path.clone(),
-            source,
-        })?;
-        Ok(Self(path))
-    }
-}
-
-impl Drop for WriterLock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
-    }
-}
-
 pub(crate) fn completed(connection: &Connection, kind: WorkKind, generation: i64) -> Result<bool> {
     let state: Option<(String, i64, Option<String>)> = connection
         .query_row(
@@ -251,58 +209,5 @@ pub(crate) fn table(kind: WorkKind) -> &'static str {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn database() -> (tempfile::TempDir, Connection) {
-        let directory = tempfile::tempdir().unwrap();
-        let connection = crate::db::open(&directory.path().join("crm.sqlite3")).unwrap();
-        (directory, connection)
-    }
-
-    #[test]
-    fn requests_coalesce_into_generations_instead_of_rows() {
-        let (_directory, connection) = database();
-        assert_eq!(
-            request(&connection, WorkKind::Gmail, "first", Duration::zero()).unwrap(),
-            1
-        );
-        assert_eq!(
-            request(&connection, WorkKind::Gmail, "second", Duration::zero()).unwrap(),
-            2
-        );
-        let state: (i64, i64, String) = connection
-            .query_row(
-                "SELECT COUNT(*), requested_generation, state
-                 FROM source_sync_state WHERE kind='gmail'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        assert_eq!(state, (1, 2, "pending".into()));
-    }
-
-    #[test]
-    fn interrupted_source_work_keeps_its_stage() {
-        let (_directory, connection) = database();
-        request(&connection, WorkKind::Whatsapp, "test", Duration::zero()).unwrap();
-        connection
-            .execute(
-                "UPDATE source_sync_state SET state='running', step='relationships'
-                 WHERE kind='whatsapp'",
-                [],
-            )
-            .unwrap();
-
-        assert_eq!(recover_interrupted(&connection).unwrap(), 1);
-
-        let state: (String, String) = connection
-            .query_row(
-                "SELECT state, step FROM source_sync_state WHERE kind='whatsapp'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(state, ("pending".into(), "relationships".into()));
-    }
-}
+#[path = "tests.rs"]
+mod tests;
