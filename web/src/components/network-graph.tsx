@@ -89,9 +89,12 @@ export function NetworkGraph({ overview, focusedPerson }: { overview: Overview; 
     defaultEdgeType: "arrow",
     hideEdgesOnMove: true,
     hideLabelsOnMove: true,
+    labelDensity: 0.45,
     labelFont: "Geist, sans-serif",
-    labelRenderedSizeThreshold: 7,
+    labelGridCellSize: 150,
+    labelRenderedSizeThreshold: 5,
     maxCameraRatio: 3,
+    minEdgeThickness: 0.4,
     minCameraRatio: 0.08,
     nodeProgramClasses: { circle: NodeCircleProgram },
     edgeProgramClasses: { arrow: EdgeArrowProgram },
@@ -133,7 +136,18 @@ function GraphController({ dark, edgeIds, fitRequest, focusedNode, layout, nodeI
   const setSettings = useSetSettings<NodeAttributes, EdgeAttributes>();
   const registerEvents = useRegisterEvents<NodeAttributes, EdgeAttributes>();
   const { isRunning, start: startForceLayout, stop: stopForceLayout } = useWorkerLayoutForceAtlas2({
-    settings: { barnesHutOptimize: true, gravity: 1, scalingRatio: 8, slowDown: 4 },
+    getEdgeWeight: "confidence",
+    settings: {
+      adjustSizes: true,
+      barnesHutOptimize: false,
+      edgeWeightInfluence: 0.5,
+      gravity: 0.08,
+      linLogMode: true,
+      outboundAttractionDistribution: true,
+      scalingRatio: 20,
+      slowDown: 4,
+      strongGravityMode: true,
+    },
   });
 
   useEffect(() => {
@@ -150,7 +164,7 @@ function GraphController({ dark, edgeIds, fitRequest, focusedNode, layout, nodeI
       ? new Set([activeNode, ...sigma.getGraph().neighbors(activeNode)])
       : null;
     setSettings({
-      defaultEdgeColor: dark ? "#525252" : "#a3a3a3",
+      defaultEdgeColor: dark ? "#303030" : "#d4d4d4",
       defaultDrawNodeHover: (context, data, settings) => {
         context.beginPath();
         context.fillStyle = data.color;
@@ -165,7 +179,7 @@ function GraphController({ dark, edgeIds, fitRequest, focusedNode, layout, nodeI
         const active = activeNode !== null && (source === activeNode || target === activeNode);
         return {
           ...data,
-          color: active ? (dark ? "#d4d4d4" : "#525252") : (dark ? "#404040" : "#d4d4d4"),
+          color: active ? (dark ? "#e5e5e5" : "#404040") : (dark ? "#303030" : "#d4d4d4"),
           forceLabel: active,
           hidden: false,
           label: active ? data.label : null,
@@ -201,7 +215,7 @@ function GraphController({ dark, edgeIds, fitRequest, focusedNode, layout, nodeI
       startForceLayout();
       const timer = window.setTimeout(() => {
         stopForceLayout();
-      }, 1600);
+      }, 6000);
       return () => window.clearTimeout(timer);
     }
     assignStaticLayout(sigma.getGraph(), layout);
@@ -240,9 +254,12 @@ function createGraph(overview: Overview, people: Map<string, Overview["people"][
       color: "#a3a3a3",
       confidence: edge.confidence,
       label: titleCase(edge.relationship_type),
-      size: 0.5 + edge.confidence * 2,
+      size: 0.35 + edge.confidence * 0.85,
       type: "arrow",
     });
+  });
+  graph.forEachNode((node, attributes) => {
+    graph.setNodeAttribute(node, "size", attributes.size + Math.min(5, Math.sqrt(graph.degree(node))));
   });
   return graph;
 }
