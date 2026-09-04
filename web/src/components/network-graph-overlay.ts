@@ -20,7 +20,10 @@ export function useActiveGraphOverlay(activeNode: string | null) {
       style: { pointerEvents: "none" },
     });
     const context = canvas.getContext("2d");
-    if (!context) return () => sigma.killLayer(layerId);
+    const killLayer = () => {
+      if (sigma.getCanvases()[layerId]) sigma.killLayer(layerId);
+    };
+    if (!context) return killLayer;
 
     const draw = () => {
       const { width, height } = sigma.getDimensions();
@@ -99,7 +102,7 @@ export function useActiveGraphOverlay(activeNode: string | null) {
     draw();
     return () => {
       sigma.off("afterRender", draw);
-      sigma.killLayer(layerId);
+      killLayer();
     };
   }, [sigma]);
 }
