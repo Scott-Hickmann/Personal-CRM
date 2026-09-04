@@ -56,6 +56,10 @@ pub(crate) fn run(format: Format, config: Option<PathBuf>, command: Command) -> 
 fn ui_data(format: Format, config_path: PathBuf, command: UiDataCommand) -> Result<()> {
     let connection = open_database(&config_path)?;
     match command {
+        UiDataCommand::Image(args) => {
+            let result = crate::contact_images::load(&connection, &args.person)?;
+            output::emit(format, "ui-data.image", &result, "Contact image".into())
+        }
         UiDataCommand::Overview => {
             let result = crate::ui_data::overview(&connection)?;
             output::emit(format, "ui-data.overview", &result, "CRM overview".into())

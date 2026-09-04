@@ -17,6 +17,7 @@ pub fn load(connection: &Connection, reference: &str, limit: u32) -> Result<Pers
         }
     }
     Ok(PersonDetail {
+        image_version: crate::contact_images::version(connection, &person_id)?,
         person,
         score: scoring::explain(connection, &person_id)?,
         interactions: interactions(connection, &person_id, limit)?,

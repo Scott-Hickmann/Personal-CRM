@@ -38,6 +38,8 @@ pub fn sync(
             "the authoritative contact container is not an iCloud account".into(),
         ));
     }
+    let images_changed =
+        crate::contact_images::sync(crm, &apple::container_path(configured, container)?)?;
     let fingerprint = apple::schema_fingerprint(configured, container)?;
     let change_token = apple::change_token(configured, container)?;
     let unchanged = if let Some(token) = change_token.as_deref() {
@@ -65,7 +67,7 @@ pub fn sync(
             imported: 0,
             deleted: 0,
             schema_fingerprint: fingerprint,
-            changed: false,
+            changed: images_changed,
         });
     }
     progress.stage(
@@ -90,7 +92,7 @@ pub fn sync(
             imported: 0,
             deleted: 0,
             schema_fingerprint: fingerprint,
-            changed: false,
+            changed: images_changed,
         });
     }
     let (contacts, companies) = partition_contacts(snapshot);

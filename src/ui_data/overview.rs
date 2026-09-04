@@ -18,7 +18,8 @@ pub fn load(connection: &Connection) -> Result<Overview> {
                 EXISTS(SELECT 1 FROM identities i WHERE i.person_id=p.id AND i.is_self=1),
                 COALESCE((SELECT GROUP_CONCAT(tag, char(31)) FROM tags WHERE person_id=p.id), ''),
                 COALESCE((SELECT GROUP_CONCAT(value, char(31)) FROM identities
-                          WHERE person_id=p.id AND (active=1 OR p.lifecycle_state='retired')), '')
+                          WHERE person_id=p.id AND (active=1 OR p.lifecycle_state='retired')), ''),
+                (SELECT version FROM contact_images WHERE apple_contact_id=p.apple_contact_id)
          FROM people p
          WHERE p.lifecycle_state IN ('active', 'retired')
            AND NOT EXISTS (SELECT 1 FROM person_merges m WHERE m.source_person_id=p.id)
@@ -27,6 +28,7 @@ pub fn load(connection: &Connection) -> Result<Overview> {
     let people = statement
         .query_map([], |row| {
             Ok(OverviewPerson {
+                image_version: row.get(11)?,
                 id: row.get(0)?,
                 display_name: row.get(1)?,
                 lifecycle_state: row.get(2)?,

@@ -103,6 +103,7 @@ pub(crate) struct StatusArgs {
 #[derive(Subcommand)]
 pub(crate) enum UiDataCommand {
     Overview,
+    Image(PersonReference),
     Person(PersonDetailArgs),
     Interaction(InteractionReference),
 }

@@ -1,4 +1,5 @@
 export type OverviewPerson = {
+  image_version: string | null;
   id: string;
   display_name: string;
   lifecycle_state: "active" | "retired";
@@ -87,6 +88,7 @@ export type Relationship = {
 };
 
 export type PersonDetail = {
+  image_version: string | null;
   person: Person;
   score: Score;
   interactions: InteractionPreview[];

@@ -8,6 +8,7 @@ mod clusters;
 mod commands;
 mod config;
 mod contact_commands;
+mod contact_images;
 mod contact_label;
 mod contact_publish;
 mod coordinator;

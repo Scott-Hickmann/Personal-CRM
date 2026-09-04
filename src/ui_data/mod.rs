@@ -20,6 +20,7 @@ pub struct Overview {
 
 #[derive(Debug, Serialize)]
 pub struct OverviewPerson {
+    pub image_version: Option<String>,
     pub id: String,
     pub display_name: String,
     pub lifecycle_state: String,
@@ -35,6 +36,7 @@ pub struct OverviewPerson {
 
 #[derive(Debug, Serialize)]
 pub struct PersonDetail {
+    pub image_version: Option<String>,
     pub person: Person,
     pub score: ScoreExplanation,
     pub interactions: Vec<InteractionPreview>,

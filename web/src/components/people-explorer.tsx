@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { ArrowDown, ArrowUp, ArrowUpRight, MessageSquareText, Search, UserRoundCheck } from "lucide-react";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -124,7 +124,7 @@ function PersonCard({ person }: { person: OverviewPerson }) {
       <Card className="h-full transition-colors group-hover:border-foreground/25">
         <CardHeader className="flex-row items-start justify-between gap-4">
           <div className="flex min-w-0 items-center gap-3">
-            <Avatar className="size-11"><AvatarFallback>{initials(person.display_name)}</AvatarFallback></Avatar>
+            <Avatar className="size-11">{person.image_version && <AvatarImage src={`/api/people/${encodeURIComponent(person.id)}/image?v=${person.image_version}`} alt="" />}<AvatarFallback>{initials(person.display_name)}</AvatarFallback></Avatar>
             <div className="min-w-0">
               <h2 className="truncate font-medium">{person.display_name}</h2>
               <p className="text-muted-foreground truncate text-xs">{person.identities[0] ?? "No active identity"}</p>

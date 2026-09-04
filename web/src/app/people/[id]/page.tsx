@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { ArrowLeft, GitFork } from "lucide-react";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -21,7 +21,7 @@ export default async function PersonPage({ params }: PageProps<"/people/[id]">) 
       <Button asChild variant="ghost" size="sm" className="mb-5 -ml-2"><Link href="/"><ArrowLeft />People</Link></Button>
       <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
         <div className="flex min-w-0 items-center gap-4">
-          <Avatar className="size-16"><AvatarFallback className="text-lg">{initials(person.display_name)}</AvatarFallback></Avatar>
+          <Avatar className="size-16">{detail.image_version && <AvatarImage src={`/api/people/${encodeURIComponent(person.id)}/image?v=${detail.image_version}`} alt="" />}<AvatarFallback className="text-lg">{initials(person.display_name)}</AvatarFallback></Avatar>
           <div className="min-w-0"><h1 className="truncate text-3xl font-semibold tracking-tight sm:text-4xl">{person.display_name}</h1><div className="mt-2 flex flex-wrap gap-2"><Badge>{titleCase(person.affinity_tier)}</Badge><Badge variant="secondary">{titleCase(person.activity_state)}</Badge><Badge variant="outline">Affinity {score.affinity_score.toFixed(1)}</Badge>{person.lifecycle_state === "retired" && <Badge variant="destructive">Retired</Badge>}</div></div>
         </div>
         <Button asChild variant="outline"><Link href={`/network?person=${encodeURIComponent(person.id)}`}><GitFork />Find in network</Link></Button>
