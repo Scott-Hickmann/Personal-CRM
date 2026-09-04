@@ -37,7 +37,8 @@ function Scene({ graph, visible, focused, layout, fitRequest }: Props) {
   const scene = useRef<ForceGraphMethods<NetworkNode, NetworkLink>>(undefined);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [hovered, setHovered] = useState<string>();
-  const [settled, setSettled] = useState(false);
+  const [settledData, setSettledData] = useState<NetworkData | null>(null);
+  const finalizedData = useRef<NetworkData | null>(null);
   const [contextLost, setContextLost] = useState(false);
   const lastFitRequest = useRef(fitRequest);
   const { resolvedTheme } = useTheme();
@@ -45,6 +46,7 @@ function Scene({ graph, visible, focused, layout, fitRequest }: Props) {
   const dark = resolvedTheme === "dark";
   const reducedMotion = useSyncExternalStore(subscribeMotion, () => window.matchMedia(motionQuery).matches, () => false);
   const data = useMemo(() => positionNetwork(graph, layout), [graph, layout]);
+  const settled = settledData === data;
   useEffect(() => {
     const instance = scene.current;
     if (instance && layout === "organic") {
@@ -143,9 +145,11 @@ function Scene({ graph, visible, focused, layout, fitRequest }: Props) {
       onNodeClick={(node) => router.push(`/people/${encodeURIComponent(node.personId)}`)}
       warmupTicks={layout === "organic" ? 100 : 0} cooldownTicks={layout === "organic" && !reducedMotion ? 100 : 0}
       onEngineStop={() => {
+        // Styling updates (including hover) also stop the engine again.
+        if (finalizedData.current === data) return;
+        finalizedData.current = data;
         if (layout === "organic") normalizeNetwork(data.nodes);
-        setSettled(true);
-        frame();
+        setSettledData(data);
       }}
     />}
     {!settled && <div className="pointer-events-none absolute top-4 left-4 rounded bg-background/80 p-2 text-sm" role="status">Arranging network…</div>}
