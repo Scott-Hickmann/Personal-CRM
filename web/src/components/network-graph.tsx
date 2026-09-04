@@ -15,7 +15,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Slider } from "@/components/ui/slider";
 import { titleCase } from "@/lib/format";
 import type { Overview } from "@/lib/types";
 
@@ -35,16 +34,14 @@ type NodeAttributes = {
 
 type EdgeAttributes = {
   color: string;
-  confidence: number;
   label: string;
   size: number;
+  weight: number;
 };
 
 export function NetworkGraph({ overview, focusedPerson }: { overview: Overview; focusedPerson?: string }) {
   const focused = overview.people.find((person) => person.id === focusedPerson);
   const [query, setQuery] = useState(focused?.display_name ?? "");
-  const [confidence, setConfidence] = useState([0]);
-  const [relationship, setRelationship] = useState("all");
   const [tier, setTier] = useState("all");
   const [activity, setActivity] = useState("all");
   const [layout, setLayout] = useState("organic");
@@ -55,8 +52,6 @@ export function NetworkGraph({ overview, focusedPerson }: { overview: Overview; 
   const people = useMemo(() => new Map(overview.people.map((person) => [person.id, person])), [overview.people]);
   const graphPeople = useMemo(() => new Map(overview.graph.nodes.map((node) => [node.id, people.get(node.person_id)])), [overview.graph.nodes, people]);
   const graph = useMemo(() => createGraph(overview, people), [overview, people]);
-  const relationshipTypes = useMemo(() => [...new Set(overview.graph.edges.map((edge) => edge.relationship_type))].sort(), [overview.graph.edges]);
-
   const visibility = useMemo(() => {
     const term = query.trim().toLocaleLowerCase();
     const edgeIds = new Set<string>();
@@ -65,7 +60,6 @@ export function NetworkGraph({ overview, focusedPerson }: { overview: Overview; 
       const source = graphPeople.get(edge.source);
       const target = graphPeople.get(edge.target);
       if (!source || !target || source.is_self || target.is_self) return;
-      if (edge.classification_confidence < confidence[0] || (relationship !== "all" && edge.relationship_type !== relationship)) return;
       if (tier !== "all" && source.affinity_tier !== tier && target.affinity_tier !== tier) return;
       if (activity !== "all" && source.activity_state !== activity && target.activity_state !== activity) return;
       if (term && ![source, target].some((person) => personSearchText(person).includes(term))) return;
@@ -74,7 +68,7 @@ export function NetworkGraph({ overview, focusedPerson }: { overview: Overview; 
       nodeIds.add(edge.target);
     });
     return { edgeIds, nodeIds };
-  }, [activity, confidence, graphPeople, overview.graph.edges, query, relationship, tier]);
+  }, [activity, graphPeople, overview.graph.edges, query, tier]);
 
   const focusedNode = useMemo(() => {
     const term = query.trim().toLocaleLowerCase();
@@ -101,12 +95,10 @@ export function NetworkGraph({ overview, focusedPerson }: { overview: Overview; 
   }), []);
 
   return <div className="space-y-4 px-5 py-6 sm:px-8 lg:px-10">
-    <Card><CardContent className="grid gap-4 p-4 lg:grid-cols-[minmax(14rem,1fr)_10rem_10rem_10rem_12rem_auto] lg:items-end">
+    <Card><CardContent className="grid gap-4 p-4 lg:grid-cols-[minmax(14rem,1fr)_10rem_10rem_10rem_auto] lg:items-end">
       <div className="space-y-2"><Label htmlFor="network-search">Find a person</Label><div className="relative"><Search className="text-muted-foreground absolute top-1/2 left-3 size-4 -translate-y-1/2" /><Input id="network-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name, identity, or tag…" className="pl-9" /></div></div>
-      <GraphSelect label="Relationship" value={relationship} onChange={setRelationship} options={relationshipTypes} />
       <GraphSelect label="Tier" value={tier} onChange={setTier} options={["core", "close", "familiar", "acquaintance", "peripheral"]} />
       <GraphSelect label="Activity" value={activity} onChange={setActivity} options={["active", "cooling", "dormant", "never"]} />
-      <div className="space-y-3"><Label>Classification confidence ≥ {Math.round(confidence[0] * 100)}%</Label><Slider value={confidence} onValueChange={setConfidence} min={0} max={1} step={0.05} /></div>
       <Button variant="outline" onClick={() => setFitRequest((request) => request + 1)}><Focus />Fit</Button>
     </CardContent></Card>
 
@@ -116,7 +108,7 @@ export function NetworkGraph({ overview, focusedPerson }: { overview: Overview; 
         <GraphController dark={resolvedTheme === "dark"} edgeIds={visibility.edgeIds} fitRequest={fitRequest} focusedNode={focusedNode} layout={layout} nodeIds={visibility.nodeIds} onLayoutReady={setGraphReady} />
       </SigmaContainer>
       {!graphReady && <div className="bg-card absolute inset-0 grid place-items-center"><p className="text-muted-foreground animate-pulse text-sm">Arranging network…</p></div>}
-      {visibility.edgeIds.size === 0 && <div className="bg-background/80 absolute inset-0 grid place-items-center"><div className="text-center"><p className="font-medium">No relationships match</p><p className="text-muted-foreground mt-1 text-sm">Lower the confidence or remove a filter.</p></div></div>}
+      {visibility.edgeIds.size === 0 && <div className="bg-background/80 absolute inset-0 grid place-items-center"><div className="text-center"><p className="font-medium">No relationships match</p><p className="text-muted-foreground mt-1 text-sm">Remove a filter or search for another person.</p></div></div>}
     </CardContent></Card>
   </div>;
 }
@@ -137,7 +129,7 @@ function GraphController({ dark, edgeIds, fitRequest, focusedNode, layout, nodeI
   const registerEvents = useRegisterEvents<NodeAttributes, EdgeAttributes>();
   const visibleNodes = useRef(nodeIds);
   const { isRunning, start: startForceLayout, stop: stopForceLayout } = useWorkerLayoutForceAtlas2({
-    getEdgeWeight: "confidence",
+    getEdgeWeight: "weight",
     settings: {
       adjustSizes: true,
       barnesHutOptimize: false,
@@ -261,9 +253,9 @@ function createGraph(overview: Overview, people: Map<string, Overview["people"][
     if (!graph.hasNode(edge.source) || !graph.hasNode(edge.target)) return;
     graph.addEdgeWithKey(`edge-${index}`, edge.source, edge.target, {
       color: "#a3a3a3",
-      confidence: edge.classification_confidence,
-      label: titleCase(edge.relationship_type),
-      size: 0.35 + edge.classification_confidence * 0.85,
+      label: `${edge.shared_context_count} shared ${edge.shared_context_count === 1 ? "conversation" : "conversations"}`,
+      size: 0.35 + Math.min(1.5, Math.log2(edge.shared_context_count + 1) * 0.4),
+      weight: Math.max(1, edge.shared_context_count),
     });
   });
   graph.forEachNode((node, attributes) => {

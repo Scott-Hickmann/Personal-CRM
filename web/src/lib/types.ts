@@ -16,8 +16,6 @@ export type GraphNode = { id: string; person_id: string; label: string };
 export type GraphEdge = {
   source: string;
   target: string;
-  relationship_type: string;
-  classification_confidence: number;
   shared_context_count: number;
 };
 
@@ -47,7 +45,6 @@ export type Score = {
   affinity_tier: string;
   activity_state: string;
   behavioral_score: number;
-  relational_score: number;
   closeness_rating: number | null;
   calibration: {
     rating_count: number;
@@ -65,17 +62,6 @@ export type Score = {
     days_since_last: number | null;
     relationship_span_days: number;
     base_score: number;
-    relational: {
-      assessed_interactions: number;
-      meaningful_interactions: number;
-      intimacy: number;
-      emotional_support: number;
-      practical_support: number;
-      affection: number;
-      shared_activity: number;
-      conflict_repair: number;
-      evidence: { occurred_at: string; summary: string }[];
-    };
   };
 };
 
@@ -95,11 +81,6 @@ export type Relationship = {
   id: string;
   person_id: string;
   display_name: string;
-  relationship_type: string;
-  classification_confidence: number;
-  classification_state: string;
-  classification_evidence: string;
-  evidence_message_ids: string[];
   shared_context_count: number;
   first_observed_at: string | null;
   last_observed_at: string | null;
@@ -119,7 +100,6 @@ export type PersonDetail = {
     created_at: string;
   }[];
   cadence: { interval_days: number; updated_at: string } | null;
-  summaries: { id: string; summary: string; model_version: string; created_at: string }[];
   photo: {
     photos_name: string | null;
     photos_asset_id: string | null;
