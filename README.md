@@ -132,7 +132,7 @@ crm review
 crm stop
 ```
 
-`crm status --live` shows every active job, its current stage, and exact `x/n` progress for contacts, contact searches, messages, interactions, people, actions, and candidates. During Gmail backfill it reports completed contact searches, the queued message count, and kept-versus-excluded totals for the current batch.
+`crm status` reports the total active contacts, total analyzable interactions, and the analyzed subset. `crm status --live` refreshes those same three totals every half second.
 
 ## Local web companion
 

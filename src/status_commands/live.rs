@@ -1,34 +1,31 @@
 use std::io::{self, Stdout};
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Local};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style, Stylize};
+use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Gauge, Paragraph, Row, Table, Wrap};
+use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::{Frame, Terminal};
 
 use super::{Status, grouped};
 use crate::error::{CrmError, Result};
-use crate::progress::ProgressSnapshot;
 
 const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 
 pub(super) fn run(mut collect: impl FnMut() -> Result<Status>) -> Result<()> {
     let mut terminal = start_terminal()?;
     let _restore = RestoreTerminal;
-    let mut scroll = 0_u16;
     let mut status = collect()?;
 
     loop {
         terminal
-            .draw(|frame| render(frame, &status, scroll))
+            .draw(|frame| render(frame, &status))
             .map_err(terminal_error)?;
 
         let deadline = Instant::now() + REFRESH_INTERVAL;
@@ -44,18 +41,10 @@ pub(super) fn run(mut collect: impl FnMut() -> Result<Status>) -> Result<()> {
                     }
                     KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                     KeyCode::Char('r') => break,
-                    KeyCode::Up | KeyCode::Char('k') => scroll = scroll.saturating_sub(1),
-                    KeyCode::Down | KeyCode::Char('j') => scroll = scroll.saturating_add(1),
-                    KeyCode::PageUp => scroll = scroll.saturating_sub(10),
-                    KeyCode::PageDown => scroll = scroll.saturating_add(10),
-                    KeyCode::Home => scroll = 0,
                     _ => {}
                 },
                 _ => {}
             }
-            terminal
-                .draw(|frame| render(frame, &status, scroll))
-                .map_err(terminal_error)?;
         }
         status = collect()?;
     }
@@ -91,211 +80,49 @@ fn terminal_error(source: io::Error) -> CrmError {
     }
 }
 
-fn render(frame: &mut Frame, status: &Status, scroll: u16) {
-    let area = frame.area();
-    let compact = area.height < 28;
-    let sections = if compact {
-        Layout::vertical([
-            Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Min(5),
-            Constraint::Length(7),
-        ])
-        .split(area)
-    } else {
-        Layout::vertical([
-            Constraint::Length(3),
-            Constraint::Length(4),
-            Constraint::Min(8),
-            Constraint::Length(8),
-            Constraint::Length(8),
-        ])
-        .split(area)
-    };
-
-    render_header(frame, sections[0], status);
-    render_summary(frame, sections[1], status);
-    render_jobs(frame, sections[2], status);
-    if compact {
-        render_events(frame, sections[3], status, scroll);
-    } else {
-        render_sources(frame, sections[3], status);
-        render_events(frame, sections[4], status, scroll);
-    }
-}
-
-fn render_header(frame: &mut Frame, area: Rect, status: &Status) {
-    let state = if status.daemon_running {
-        Span::styled("● RUNNING", Style::new().fg(Color::Green).bold())
-    } else {
-        Span::styled("● STOPPED", Style::new().fg(Color::Red).bold())
-    };
-    let pid = status
-        .daemon_pid
-        .map(|pid| format!("  PID {pid}"))
-        .unwrap_or_default();
-    let title = Line::from(vec![
-        Span::styled(" Personal CRM ", Style::new().bold()),
-        state,
-        Span::raw(pid),
-    ]);
+fn render(frame: &mut Frame, status: &Status) {
+    let sections =
+        Layout::vertical([Constraint::Length(3), Constraint::Length(5)]).split(frame.area());
     frame.render_widget(
-        Paragraph::new(title).block(
-            Block::default().borders(Borders::ALL).title_bottom(
-                Line::from(" q/Esc/Ctrl-C quit  r refresh  ↑↓ scroll ").right_aligned(),
-            ),
+        Paragraph::new(Line::from(Span::styled(
+            " Personal CRM ",
+            Style::new().add_modifier(Modifier::BOLD),
+        )))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title_bottom(Line::from(" q/Esc/Ctrl-C quit  r refresh ").right_aligned()),
         ),
-        area,
+        sections[0],
     );
+    render_summary(frame, sections[1], status);
 }
 
 fn render_summary(frame: &mut Frame, area: Rect, status: &Status) {
-    let text = Line::from(vec![
-        metric("QUEUED", status.queued_jobs, Color::Yellow),
-        Span::raw("   "),
-        metric("RUNNING", status.running_jobs, Color::Cyan),
-        Span::raw("   "),
-        metric("FAILED", status.failed_jobs, Color::Red),
-        Span::raw("   "),
-        metric("ANALYSIS", status.pending_analysis, Color::Magenta),
-        Span::raw("   "),
-        metric("REVIEWS", status.pending_reviews, Color::Blue),
-    ]);
-    frame.render_widget(
-        Paragraph::new(text)
-            .block(Block::default().borders(Borders::ALL).title(" Overview "))
-            .wrap(Wrap { trim: true }),
-        area,
-    );
-}
-
-fn metric(label: &'static str, value: i64, color: Color) -> Span<'static> {
-    Span::styled(
-        format!("{label} {value}"),
-        Style::new().fg(color).add_modifier(Modifier::BOLD),
-    )
-}
-
-fn render_jobs(frame: &mut Frame, area: Rect, status: &Status) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Current activity ");
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    if !status.daemon_running || status.running_activity.is_empty() {
-        let message = if status.daemon_running {
-            "Waiting for work."
-        } else {
-            "Daemon is stopped; no live activity."
-        };
-        frame.render_widget(Paragraph::new(message).dim(), inner);
-        return;
-    }
-
-    let heights = vec![Constraint::Length(3); status.running_activity.len()];
-    for (progress, job_area) in status.running_activity.iter().zip(
-        Layout::new(Direction::Vertical, heights)
-            .split(inner)
-            .iter(),
-    ) {
-        render_job(frame, *job_area, progress);
-    }
-}
-
-fn render_job(frame: &mut Frame, area: Rect, progress: &ProgressSnapshot) {
-    let total = progress.total.max(progress.current);
-    let ratio = if total == 0 {
-        1.0
-    } else {
-        progress.current as f64 / total as f64
-    };
-    let estimate = if progress.total_is_estimate { "~" } else { "" };
-    let unit = progress.unit.as_deref().unwrap_or("items");
-    let label = format!(
-        "{} / {}{} {}  •  stage {} / {}",
-        grouped(progress.current),
-        estimate,
-        grouped(total),
-        unit,
-        progress.stage_current,
-        progress.stage_total
-    );
-    let title = format!(
-        " {}  {} ",
-        progress.job_kind.as_deref().unwrap_or("job"),
-        progress.message
-    );
-    frame.render_widget(
-        Gauge::default()
-            .block(Block::default().borders(Borders::TOP).title(title))
-            .gauge_style(Style::new().fg(Color::Cyan))
-            .ratio(ratio.clamp(0.0, 1.0))
-            .label(label)
-            .use_unicode(true),
-        area,
-    );
-}
-
-fn render_sources(frame: &mut Frame, area: Rect, status: &Status) {
-    let rows = status.sources.iter().map(|source| {
-        Row::new([
-            source.id.clone(),
-            source.status.clone(),
-            source.last_sync_at.as_deref().unwrap_or("-").to_owned(),
-            source.error.as_deref().unwrap_or("").to_owned(),
-        ])
-    });
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(18),
-            Constraint::Length(10),
-            Constraint::Length(26),
-            Constraint::Min(10),
-        ],
-    )
-    .header(Row::new(["SOURCE", "STATE", "LAST SYNC", "ERROR"]).bold())
-    .block(Block::default().borders(Borders::ALL).title(" Sources "));
-    frame.render_widget(table, area);
-}
-
-fn render_events(frame: &mut Frame, area: Rect, status: &Status, scroll: u16) {
-    let events: Vec<Line<'_>> = status
-        .running_activity
-        .iter()
-        .flat_map(|progress| progress.events.iter())
-        .map(|event| {
-            Line::from(vec![
-                Span::styled(local_time(&event.at), Style::new().fg(Color::DarkGray)),
-                Span::raw("  "),
-                Span::raw(&event.message),
-            ])
-        })
-        .collect();
-    let content = if events.is_empty() {
-        Paragraph::new("No recent activity.").dim()
-    } else {
-        Paragraph::new(events).scroll((scroll, 0))
-    };
-    frame.render_widget(
-        content.block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Recent activity "),
+    let rows = vec![
+        metric("CONTACTS", status.total_contacts, Color::Cyan),
+        metric(
+            "ANALYZABLE INTERACTIONS",
+            status.total_analyzable_interactions,
+            Color::Magenta,
         ),
+        metric(
+            "ANALYZED INTERACTIONS",
+            status.analyzed_interactions,
+            Color::Green,
+        ),
+    ];
+    frame.render_widget(
+        Paragraph::new(rows).block(Block::default().borders(Borders::ALL).title(" Totals ")),
         area,
     );
 }
 
-fn local_time(value: &str) -> String {
-    DateTime::parse_from_rfc3339(value)
-        .map(|timestamp| {
-            timestamp
-                .with_timezone(&Local)
-                .format("%H:%M:%S")
-                .to_string()
-        })
-        .unwrap_or_else(|_| "--:--:--".into())
+fn metric(label: &'static str, value: i64, color: Color) -> Line<'static> {
+    Line::from(Span::styled(
+        format!("{label:<26} {}", grouped(value)),
+        Style::new().fg(color).add_modifier(Modifier::BOLD),
+    ))
 }
 
 #[cfg(test)]
@@ -304,25 +131,18 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     #[test]
-    fn renders_live_dashboard_with_exact_progress() {
-        let mut status = super::super::initialized("config.toml".into(), "crm.sqlite3".into(), 10);
-        status.daemon_running = true;
-        status.running_activity.push(ProgressSnapshot {
-            state: "running".into(),
-            message: "Reading WhatsApp conversations".into(),
-            stage_current: 2,
-            stage_total: 4,
-            current: 25,
-            total: 100,
-            unit: Some("messages".into()),
-            ..ProgressSnapshot::default()
-        });
-        let backend = TestBackend::new(100, 32);
+    fn renders_the_three_requested_totals() {
+        let status = Status {
+            total_contacts: 765,
+            total_analyzable_interactions: 5_274,
+            analyzed_interactions: 4_359,
+        };
+        let backend = TestBackend::new(80, 12);
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|frame| render(frame, &status, 0)).unwrap();
+        terminal.draw(|frame| render(frame, &status)).unwrap();
         let screen = terminal.backend().to_string();
-        assert!(screen.contains("Reading WhatsApp conversations"));
-        assert!(screen.contains("25 / 100 messages"));
-        assert!(screen.contains("stage 2 / 4"));
+        assert!(screen.contains("CONTACTS                   765"));
+        assert!(screen.contains("ANALYZABLE INTERACTIONS    5,274"));
+        assert!(screen.contains("ANALYZED INTERACTIONS      4,359"));
     }
 }

@@ -12,6 +12,22 @@ use crate::config::Config;
 use crate::error::Result;
 use crate::progress::ProgressTracker;
 
+const ANALYZABLE_FILTER: &str = "deleted_at IS NULL AND body IS NOT NULL AND trim(body) != ''
+    AND EXISTS (
+      SELECT 1 FROM interaction_participants ip JOIN people p ON p.id=ip.person_id
+      WHERE ip.interaction_id=interactions.id AND p.lifecycle_state='active'
+        AND p.apple_contact_id IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM identities own
+          WHERE own.person_id=p.id AND own.is_self=1 AND own.active=1
+        )
+    )";
+
+pub(crate) struct Counts {
+    pub total: i64,
+    pub analyzed: i64,
+}
+
 #[derive(Debug, Serialize)]
 pub struct AnalysisReport {
     pub selected: usize,
@@ -154,24 +170,32 @@ fn persist_ready(
 }
 
 fn pending_ids(connection: &Connection) -> Result<Vec<String>> {
-    let mut statement = connection.prepare(
-        "SELECT id
-         FROM interactions
-         WHERE analysis_state='pending' AND deleted_at IS NULL AND body IS NOT NULL AND trim(body) != ''
-           AND EXISTS (
-             SELECT 1 FROM interaction_participants ip JOIN people p ON p.id=ip.person_id
-             WHERE ip.interaction_id=interactions.id AND p.lifecycle_state='active'
-               AND p.apple_contact_id IS NOT NULL
-               AND NOT EXISTS (
-                 SELECT 1 FROM identities own
-                 WHERE own.person_id=p.id AND own.is_self=1 AND own.active=1
-               )
-           )
-         ORDER BY occurred_at DESC, id",
-    )?;
+    let mut statement = connection.prepare(&format!(
+        "SELECT id FROM interactions
+         WHERE analysis_state='pending' AND {ANALYZABLE_FILTER}
+         ORDER BY occurred_at DESC, id"
+    ))?;
     statement
         .query_map([], |row| row.get(0))?
         .collect::<std::result::Result<_, _>>()
+        .map_err(Into::into)
+}
+
+pub(crate) fn counts(connection: &Connection) -> Result<Counts> {
+    connection
+        .query_row(
+            &format!(
+                "SELECT COUNT(*), COALESCE(SUM(analysis_state='complete'), 0)
+                 FROM interactions WHERE {ANALYZABLE_FILTER}"
+            ),
+            [],
+            |row| {
+                Ok(Counts {
+                    total: row.get(0)?,
+                    analyzed: row.get(1)?,
+                })
+            },
+        )
         .map_err(Into::into)
 }
 
@@ -287,6 +311,9 @@ mod tests {
             )
             .unwrap();
         assert!(pending_ids(&connection).unwrap().is_empty());
+        let counts = counts(&connection).unwrap();
+        assert_eq!(counts.total, 1);
+        assert_eq!(counts.analyzed, 1);
     }
 
     #[test]

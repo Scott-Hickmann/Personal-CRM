@@ -117,22 +117,6 @@ pub fn recover_kind(connection: &Connection, kind: JobKind, error: &str) -> Resu
     Ok(())
 }
 
-pub fn unresolved_failed_count(connection: &Connection) -> Result<i64> {
-    connection
-        .query_row(
-            "SELECT COUNT(DISTINCT failed.kind) FROM jobs failed
-             WHERE failed.state='failed'
-             AND NOT EXISTS (
-                SELECT 1 FROM jobs succeeded
-                WHERE succeeded.kind=failed.kind AND succeeded.state='complete'
-                AND succeeded.id>failed.id
-             )",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(Into::into)
-}
-
 pub fn ready(connection: &Connection) -> Result<Vec<(i64, JobKind)>> {
     let mut statement = connection.prepare(
         "SELECT id, kind FROM jobs
