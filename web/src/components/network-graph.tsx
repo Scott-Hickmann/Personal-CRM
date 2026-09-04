@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useActiveGraphOverlay } from "@/components/network-graph-overlay";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { titleCase } from "@/lib/format";
 import type { Overview } from "@/lib/types";
@@ -23,7 +24,7 @@ const tierColors: Record<string, string> = {
   acquaintance: "#f59e0b", peripheral: "#737373", unknown: "#a3a3a3",
 };
 
-type NodeAttributes = {
+export type NodeAttributes = {
   color: string;
   label: string;
   personId: string;
@@ -32,7 +33,7 @@ type NodeAttributes = {
   y: number;
 };
 
-type EdgeAttributes = {
+export type EdgeAttributes = {
   color: string;
   label: string;
   size: number;
@@ -128,6 +129,8 @@ function GraphController({ dark, edgeIds, fitRequest, focusedNode, layout, nodeI
   const setSettings = useSetSettings<NodeAttributes, EdgeAttributes>();
   const registerEvents = useRegisterEvents<NodeAttributes, EdgeAttributes>();
   const visibleNodes = useRef(nodeIds);
+  const activeNode = hoveredNode ?? focusedNode;
+  useActiveGraphOverlay(activeNode);
   const { isRunning, start: startForceLayout, stop: stopForceLayout } = useWorkerLayoutForceAtlas2({
     getEdgeWeight: "weight",
     settings: {
@@ -156,7 +159,6 @@ function GraphController({ dark, edgeIds, fitRequest, focusedNode, layout, nodeI
   }, [registerEvents, router, sigma]);
 
   useEffect(() => {
-    const activeNode = hoveredNode ?? focusedNode;
     const activeNodes = activeNode && sigma.getGraph().hasNode(activeNode)
       ? new Set([activeNode, ...sigma.getGraph().neighbors(activeNode)])
       : null;
@@ -199,7 +201,7 @@ function GraphController({ dark, edgeIds, fitRequest, focusedNode, layout, nodeI
         };
       },
     });
-  }, [dark, edgeIds, focusedNode, hoveredNode, nodeIds, setSettings, sigma]);
+  }, [activeNode, dark, edgeIds, nodeIds, setSettings, sigma]);
 
   useEffect(() => {
     if (fitRequest === 0) return;
