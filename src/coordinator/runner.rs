@@ -28,7 +28,8 @@ pub(super) fn process(config_path: &Path, connection: &Connection, kind: WorkKin
     {
         return Ok(false);
     }
-    let mut progress = ProgressTracker::start(config_path, kind.as_str());
+    let mut progress =
+        ProgressTracker::start(config_path, kind.as_str(), generation, reason.as_deref());
     let result = if kind.is_source() {
         process_source(
             config_path,
@@ -70,6 +71,7 @@ fn process_source(
         |row| row.get(0),
     )?;
     if step == "sync" {
+        progress.phase("import", "Import source data", 1, 3);
         let reports = crate::sync::import_with_progress(target, &config, connection, progress)?;
         let sources = reports
             .iter()
@@ -95,6 +97,7 @@ fn process_source(
     let sources: Vec<String> = serde_json::from_str(&sources_json)
         .map_err(|error| crate::error::CrmError::Serialization(error.to_string()))?;
     if step == "relationships" {
+        progress.phase("relationships", "Reconcile relationships", 2, 3);
         let reports = sources
             .iter()
             .map(|source| crate::sync::SyncReport {
@@ -105,7 +108,7 @@ fn process_source(
                 changed,
             })
             .collect::<Vec<_>>();
-        crate::sync::reconcile(target, connection, &reports)?;
+        crate::sync::reconcile_with_progress(target, connection, &reports, progress)?;
         crate::relationships::clear_dirty(connection, &sources, kind == WorkKind::Contacts)?;
         connection.execute(
             "UPDATE source_sync_state SET step='dirty_people', updated_at=CURRENT_TIMESTAMP
@@ -113,18 +116,24 @@ fn process_source(
             [kind.as_str()],
         )?;
     }
+    progress.phase("dirty_people", "Mark affected people", 3, 3);
+    progress.stage("Marking affected people", 1, 1, 1, false, "step");
     if changed {
         crate::scoring::mark_dirty_for_sources(connection, kind == WorkKind::Contacts, &sources)?;
     }
+    progress.finish_stage("Marked affected people", 1, 1, false, "step");
     let transaction = crate::db::immediate_transaction(connection)?;
     finish(&transaction, kind, generation)?;
-    request_downstream(
+    let downstream = request_downstream(
         &transaction,
         kind,
         changed,
         reason == Some("daemon startup"),
     )?;
     transaction.commit()?;
+    for requested in downstream {
+        progress.event(format!("Queued {}", requested.as_str()));
+    }
     Ok(())
 }
 
@@ -135,6 +144,12 @@ fn process_maintenance(
     generation: i64,
     progress: &mut ProgressTracker,
 ) -> Result<()> {
+    progress.phase(
+        kind.as_str(),
+        format!("Run {} maintenance", kind.as_str().replace('_', " ")),
+        1,
+        1,
+    );
     match kind {
         WorkKind::Scoring => {
             crate::scoring::recalculate_dirty(connection, progress)?;
@@ -198,7 +213,8 @@ fn request_downstream(
     kind: WorkKind,
     changed: bool,
     daemon_startup: bool,
-) -> Result<()> {
+) -> Result<Vec<WorkKind>> {
+    let mut requested = Vec::new();
     if changed {
         request(
             connection,
@@ -206,12 +222,14 @@ fn request_downstream(
             "source data changed",
             Duration::zero(),
         )?;
+        requested.push(WorkKind::Scoring);
         request(
             connection,
             WorkKind::Suggestions,
             "source data changed",
             Duration::zero(),
         )?;
+        requested.push(WorkKind::Suggestions);
     }
     if kind == WorkKind::Contacts && (changed || daemon_startup) {
         request(
@@ -224,6 +242,7 @@ fn request_downstream(
             },
             Duration::zero(),
         )?;
+        requested.push(WorkKind::GooglePublish);
     }
     if kind == WorkKind::Contacts && changed {
         request(
@@ -232,6 +251,7 @@ fn request_downstream(
             "contact identities changed",
             Duration::zero(),
         )?;
+        requested.push(WorkKind::Gmail);
     }
     if kind == WorkKind::Gmail && crate::sync::gmail_backfill_pending(connection)? {
         request(
@@ -240,8 +260,9 @@ fn request_downstream(
             "Gmail backfill pending",
             Duration::seconds(2),
         )?;
+        requested.push(WorkKind::Gmail);
     }
-    Ok(())
+    Ok(requested)
 }
 
 fn sync_target(kind: WorkKind) -> SyncTarget {

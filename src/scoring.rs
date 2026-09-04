@@ -59,21 +59,25 @@ pub fn recalculate_dirty(connection: &Connection, progress: &mut ProgressTracker
         .collect::<std::result::Result<_, _>>()?;
     drop(statement);
     let total = people.len() as u64;
-    progress.stage(
-        "Recalculating relationship scores",
-        1,
-        1,
-        total,
-        false,
-        "people",
-    );
+    progress.phase("calculate_scores", "Calculate relationship scores", 1, 2);
+    progress.stage("Calculating score inputs", 1, 1, total, false, "people");
     let mut candidates = Vec::with_capacity(people.len());
-    for (id, name) in &people {
+    for (index, (id, name)) in people.iter().enumerate() {
         progress.focus([name.clone()]);
         candidates.push(calculate_candidate(connection, id)?);
+        progress.progress(
+            "Calculating score inputs",
+            (index + 1) as u64,
+            total,
+            false,
+            "people",
+        );
     }
+    progress.finish_stage("Calculated score inputs", total, total, false, "people");
     let ratings = ratings(connection)?;
     let calibration = fit_calibration(&candidates, &ratings);
+    progress.phase("persist_scores", "Persist relationship scores", 2, 2);
+    progress.stage("Writing relationship scores", 1, 1, total, false, "people");
     for (index, candidate) in candidates.iter().enumerate() {
         progress.focus([people[index].1.clone()]);
         persist(
@@ -87,20 +91,14 @@ pub fn recalculate_dirty(connection: &Connection, progress: &mut ProgressTracker
             [&candidate.person_id],
         )?;
         progress.progress(
-            "Recalculating relationship scores",
+            "Writing relationship scores",
             (index + 1) as u64,
             total,
             false,
             "people",
         );
     }
-    progress.finish_stage(
-        "Recalculated relationship scores",
-        total,
-        total,
-        false,
-        "people",
-    );
+    progress.finish_stage("Wrote relationship scores", total, total, false, "people");
     Ok(people.len())
 }
 

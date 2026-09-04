@@ -53,7 +53,7 @@ pub(crate) fn run_with_progress(
     progress: &mut ProgressTracker,
 ) -> Result<Vec<SyncReport>> {
     let reports = import_with_progress(target, config, crm, progress)?;
-    reconcile(target, crm, &reports)?;
+    reconcile_with_progress(target, crm, &reports, progress)?;
     Ok(reports)
 }
 
@@ -85,21 +85,50 @@ pub(crate) fn import_with_progress(
     Ok(reports)
 }
 
-pub(crate) fn reconcile(
+pub(crate) fn reconcile_with_progress(
     target: SyncTarget,
     crm: &Connection,
     reports: &[SyncReport],
+    progress: &mut ProgressTracker,
 ) -> Result<()> {
     if matches!(target, SyncTarget::Contacts) {
+        progress.stage("Rebinding contact identities", 1, 2, 1, false, "query");
         crate::relationships::rebind_unresolved_members(crm)?;
+        progress.finish_stage("Rebound contact identities", 1, 1, false, "query");
+        progress.stage("Rebuilding relationship contexts", 2, 2, 1, false, "query");
         crate::relationships::reconcile_all(crm)?;
+        progress.finish_stage("Rebuilt relationship contexts", 1, 1, false, "query");
     } else {
-        for source in reports {
+        let total = reports.len() as u64;
+        progress.stage(
+            "Rebuilding relationship contexts",
+            1,
+            1,
+            total,
+            false,
+            "sources",
+        );
+        for (index, source) in reports.iter().enumerate() {
+            progress.focus_now([source.source.clone()]);
             if matches!(target, SyncTarget::Gmail) {
                 crate::relationships::rebuild_members_from_interactions(crm, &source.source)?;
             }
             crate::relationships::reconcile_source(crm, &source.source)?;
+            progress.progress_now(
+                "Rebuilding relationship contexts",
+                (index + 1) as u64,
+                total,
+                false,
+                "sources",
+            );
         }
+        progress.finish_stage(
+            "Rebuilt relationship contexts",
+            total,
+            total,
+            false,
+            "sources",
+        );
     }
     Ok(())
 }
