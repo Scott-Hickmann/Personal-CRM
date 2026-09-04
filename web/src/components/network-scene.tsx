@@ -5,7 +5,6 @@ import ForceGraph3D, { type ForceGraphMethods } from "react-force-graph-3d";
 import SpriteText from "three-spritetext";
 import { Group, type PerspectiveCamera } from "three";
 import { useTheme } from "next-themes";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { endpointId, normalizeNetwork, positionNetwork, type NetworkData, type NetworkNode, type NetworkLink } from "@/lib/network";
 
@@ -36,13 +35,12 @@ function Scene({ graph, visible, focused, layout, fitRequest }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const scene = useRef<ForceGraphMethods<NetworkNode, NetworkLink>>(undefined);
   const [size, setSize] = useState({ width: 0, height: 0 });
-  const [hovered, setHovered] = useState<string>();
+  const [selection, setSelection] = useState<{ id?: string; focused?: string }>();
   const [settledData, setSettledData] = useState<NetworkData | null>(null);
   const finalizedData = useRef<NetworkData | null>(null);
   const [contextLost, setContextLost] = useState(false);
   const lastFitRequest = useRef(fitRequest);
   const { resolvedTheme } = useTheme();
-  const router = useRouter();
   const dark = resolvedTheme === "dark";
   const reducedMotion = useSyncExternalStore(subscribeMotion, () => window.matchMedia(motionQuery).matches, () => false);
   const data = useMemo(() => positionNetwork(graph, layout), [graph, layout]);
@@ -61,7 +59,9 @@ function Scene({ graph, visible, focused, layout, fitRequest }: Props) {
       });
     }
   }, [data, layout, size.width]);
-  const active = hovered && visible.nodes.has(hovered) ? hovered : focused;
+  const selectedId = selection && selection.focused === focused ? selection.id : focused;
+  const active = selectedId && visible.nodes.has(selectedId) ? selectedId : undefined;
+  const selectedPerson = data.nodes.find((node) => node.id === active);
   const neighbors = useMemo(() => {
     const ids = new Set<string>();
     if (active) {
@@ -141,17 +141,22 @@ function Scene({ graph, visible, focused, layout, fitRequest }: Props) {
       linkWidth={(link) => activeLink(link) ? 0.5 + Math.min(1.5, Math.log2(link.weight + 1) * 0.2) : 0}
       linkOpacity={0.5} linkThreeObject={edgeObject} linkThreeObjectExtend
       linkPositionUpdate={(object, { start, end }) => { object.position.set((start.x + end.x) / 2, (start.y + end.y) / 2, (start.z + end.z) / 2); }}
-      onNodeHover={(node) => setHovered(node?.id)}
-      onNodeClick={(node) => router.push(`/people/${encodeURIComponent(node.personId)}`)}
+      onNodeClick={(node) => setSelection({ id: node.id === active ? undefined : node.id, focused })}
+      onBackgroundClick={() => setSelection({ focused })}
       warmupTicks={layout === "organic" ? 100 : 0} cooldownTicks={layout === "organic" && !reducedMotion ? 100 : 0}
       onEngineStop={() => {
-        // Styling updates (including hover) also stop the engine again.
+        // Selection styling updates also stop the engine again.
         if (finalizedData.current === data) return;
         finalizedData.current = data;
         if (layout === "organic") normalizeNetwork(data.nodes);
         setSettledData(data);
       }}
     />}
+    {selectedPerson && <div className="absolute top-4 right-4 flex max-w-[calc(100%-2rem)] flex-wrap items-center gap-3 rounded-lg border bg-background/95 px-3 py-2 text-sm shadow-sm">
+      <span className="font-medium" aria-live="polite">{selectedPerson.label}</span>
+      <Link className="underline underline-offset-4" href={`/people/${encodeURIComponent(selectedPerson.personId)}`}>Open profile</Link>
+      <button className="text-muted-foreground hover:text-foreground" onClick={() => setSelection({ focused })} aria-label="Clear selection">Clear</button>
+    </div>}
     {!settled && <div className="pointer-events-none absolute top-4 left-4 rounded bg-background/80 p-2 text-sm" role="status">Arranging network…</div>}
     {contextLost && <div className="bg-background absolute inset-0 grid place-items-center p-6" role="alert">Graphics connection lost. Reload to restore the graph.</div>}
   </div>;

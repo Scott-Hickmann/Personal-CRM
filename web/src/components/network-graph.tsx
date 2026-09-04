@@ -41,7 +41,7 @@ export function NetworkGraph({ overview, focusedPerson }: { overview: Overview; 
       <NetworkScene graph={graph} visible={visible} focused={focused?.id} layout={layout} fitRequest={fitRequest} />
       {visible.links.size === 0 && <div className="bg-background/80 absolute inset-0 grid place-items-center"><div className="text-center"><p className="font-medium">No relationships match</p><p className="text-muted-foreground mt-1 text-sm">Remove a filter or search for another person.</p></div></div>}
     </CardContent></Card>
-    <p className="text-muted-foreground text-xs">Drag to orbit · Scroll or pinch to zoom · Right-drag to pan · Click a person to open their profile</p>
+    <p className="text-muted-foreground text-xs">Drag to orbit · Scroll or pinch to zoom · Right-drag to pan · Click a person to highlight relationships · Click empty space to clear</p>
   </div>;
 }
 
