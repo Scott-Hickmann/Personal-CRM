@@ -135,7 +135,7 @@ function Scene({ graph, visible, focused, layout, fitRequest }: Props) {
       showNavInfo={false} enableNodeDrag={false} nodeResolution={8}
       nodeVisibility={(node) => visible.nodes.has(node.id)} linkVisibility={(link) => visible.links.has(link.id)}
       nodeVal={(node) => (node.size / 4) ** 3} nodeRelSize={2}
-      nodeColor={(node) => active && !neighbors.has(node.id) ? (dark ? "#404040" : "#d4d4d4") : node.color}
+      nodeColor={(node) => active && !neighbors.has(node.id) ? (dark ? "rgba(64,64,64,0.15)" : "rgba(212,212,212,0.15)") : node.color}
       nodeLabel={() => ""} nodeThreeObject={labelObject} nodeThreeObjectExtend
       linkColor={(link) => activeLink(link) ? (dark ? "#e5e5e5" : "#404040") : (dark ? "#555555" : "#bbbbbb")}
       linkWidth={(link) => activeLink(link) ? 0.5 + Math.min(1.5, Math.log2(link.weight + 1) * 0.2) : 0}
