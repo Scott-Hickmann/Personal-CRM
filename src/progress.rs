@@ -203,13 +203,26 @@ pub(crate) fn record_interrupted(config_path: &Path, count: usize) {
         return;
     };
     for entry in entries.flatten() {
-        if entry
-            .path()
-            .extension()
-            .is_some_and(|value| value == "json")
-        {
-            let _ = fs::remove_file(entry.path());
+        let path = entry.path();
+        if !path.extension().is_some_and(|value| value == "json") {
+            continue;
         }
+        let Some(mut snapshot) = read_path(&path).filter(|snapshot| snapshot.state == "running")
+        else {
+            continue;
+        };
+        let message = format!(
+            "Interrupted at {} of {} {}: {}",
+            snapshot.current,
+            snapshot.total,
+            snapshot.unit.as_deref().unwrap_or("items"),
+            snapshot.message,
+        );
+        snapshot.state = "interrupted".into();
+        snapshot.message.clone_from(&message);
+        snapshot.updated_at = Utc::now().to_rfc3339();
+        append_event(&mut snapshot, message);
+        let _ = write_path(&path, &snapshot);
     }
 }
 
@@ -289,14 +302,46 @@ mod tests {
     }
 
     #[test]
-    fn records_interrupted_jobs_as_idle_and_retryable() {
+    fn preserves_interrupted_job_progress_for_the_next_run() {
         let directory = tempfile::tempdir().unwrap();
         let config_path = directory.path().join("config.toml");
-        ProgressTracker::start(&config_path, 7, "whatsapp");
+        let mut tracker = ProgressTracker::start(&config_path, 7, "analysis");
+        tracker.progress_now(
+            "Analyzing interactions 97-104 of 915",
+            96,
+            915,
+            false,
+            "interactions",
+        );
 
         record_interrupted(&config_path, 1);
 
-        assert!(read(&config_path, "whatsapp").is_none());
+        let snapshot = read(&config_path, "analysis").unwrap();
+        assert_eq!(snapshot.state, "interrupted");
+        assert_eq!(snapshot.current, 96);
+        assert_eq!(snapshot.total, 915);
+        assert_eq!(
+            snapshot.message,
+            "Interrupted at 96 of 915 interactions: Analyzing interactions 97-104 of 915"
+        );
+
+        let tracker = ProgressTracker::start(&config_path, 7, "analysis");
+        assert_eq!(
+            tracker.snapshot.events[tracker.snapshot.events.len() - 2].message,
+            "Interrupted at 96 of 915 interactions: Analyzing interactions 97-104 of 915"
+        );
+    }
+
+    #[test]
+    fn leaves_idle_progress_unchanged_when_another_job_was_interrupted() {
+        let directory = tempfile::tempdir().unwrap();
+        let config_path = directory.path().join("config.toml");
+        let mut tracker = ProgressTracker::start(&config_path, 8, "gmail");
+        tracker.idle("Completed gmail");
+
+        record_interrupted(&config_path, 1);
+
+        assert_eq!(read(&config_path, "gmail").unwrap().state, "idle");
     }
 
     #[test]
