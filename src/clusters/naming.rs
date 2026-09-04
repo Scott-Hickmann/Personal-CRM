@@ -40,9 +40,9 @@ pub fn suggest(input: &Input, members: &[String]) -> (String, Vec<NameEvidence>)
     });
     let candidate = evidence
         .iter()
-        .find(|e| e.coverage >= 0.5 && e.specificity >= 0.6 && e.label.chars().count() <= 70);
+        .position(|e| e.coverage >= 0.5 && e.specificity >= 0.6 && e.label.chars().count() <= 70);
     let name = candidate
-        .map(|e| e.label.trim().to_owned())
+        .map(|index| evidence[index].label.trim().to_owned())
         .unwrap_or_else(|| {
             let mut degrees = std::collections::BTreeMap::<&String, f64>::new();
             for &(a, b, weight, _) in &input.edges {
@@ -72,6 +72,10 @@ pub fn suggest(input: &Input, members: &[String]) -> (String, Vec<NameEvidence>)
                 .join(" & ");
             format!("Group around {names}")
         });
+    if let Some(index) = candidate {
+        let supporting = evidence.remove(index);
+        evidence.insert(0, supporting);
+    }
     evidence.truncate(5);
     (name, evidence)
 }

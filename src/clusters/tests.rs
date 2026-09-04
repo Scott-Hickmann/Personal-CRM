@@ -1,7 +1,7 @@
 use super::*;
 use std::collections::BTreeSet;
 
-fn fixture() -> input::Input {
+pub(super) fn fixture() -> input::Input {
     let people = (0..8)
         .map(|i| (format!("p{i}"), format!("Person {i}")))
         .collect();
