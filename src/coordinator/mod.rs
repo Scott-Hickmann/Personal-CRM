@@ -120,10 +120,8 @@ pub(crate) fn process_one(config_path: &Path, connection: &Connection) -> Result
             params![kind.as_str(), now],
             |row| row.get(0),
         )?;
-        if ready {
-            if runner::process(config_path, connection, kind)? {
-                return Ok(true);
-            }
+        if ready && runner::process(config_path, connection, kind)? {
+            return Ok(true);
         }
     }
     Ok(false)
@@ -164,40 +162,6 @@ pub(crate) fn completed(connection: &Connection, kind: WorkKind, generation: i64
         Some((_, completed, _)) => Ok(completed >= generation),
         None => Ok(false),
     }
-}
-
-pub(crate) fn pending_count(connection: &Connection) -> Result<i64> {
-    connection
-        .query_row(
-            "SELECT
-               (SELECT COUNT(*) FROM source_sync_state WHERE state='pending') +
-               (SELECT COUNT(*) FROM maintenance_state WHERE state='pending')",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(Into::into)
-}
-
-pub(crate) fn failed_count(connection: &Connection) -> Result<i64> {
-    connection
-        .query_row(
-            "SELECT
-               (SELECT COUNT(*) FROM source_sync_state WHERE state='failed') +
-               (SELECT COUNT(*) FROM maintenance_state WHERE state='failed')",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(Into::into)
-}
-
-pub(crate) fn running(connection: &Connection) -> Result<Vec<String>> {
-    let mut statement = connection.prepare(
-        "SELECT kind FROM source_sync_state WHERE state='running'
-         UNION ALL SELECT kind FROM maintenance_state WHERE state='running' ORDER BY kind",
-    )?;
-    Ok(statement
-        .query_map([], |row| row.get(0))?
-        .collect::<std::result::Result<_, _>>()?)
 }
 
 pub(crate) fn table(kind: WorkKind) -> &'static str {

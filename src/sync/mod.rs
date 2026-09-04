@@ -95,31 +95,51 @@ pub(crate) fn reconcile_with_progress(
         progress.stage("Rebinding contact identities", 1, 2, 1, false, "query");
         crate::relationships::rebind_unresolved_members(crm)?;
         progress.finish_stage("Rebound contact identities", 1, 1, false, "query");
-        progress.stage("Rebuilding relationship contexts", 2, 2, 1, false, "query");
+        let total = dirty_conversation_count(crm, None)?;
+        progress.stage(
+            "Rebuilding relationship contexts",
+            2,
+            2,
+            total,
+            false,
+            "conversations",
+        );
         crate::relationships::reconcile_all(crm)?;
-        progress.finish_stage("Rebuilt relationship contexts", 1, 1, false, "query");
+        progress.finish_stage(
+            "Rebuilt relationship contexts",
+            total,
+            total,
+            false,
+            "conversations",
+        );
     } else {
-        let total = reports.len() as u64;
+        let counts = reports
+            .iter()
+            .map(|source| dirty_conversation_count(crm, Some(&source.source)))
+            .collect::<Result<Vec<_>>>()?;
+        let total = counts.iter().sum();
         progress.stage(
             "Rebuilding relationship contexts",
             1,
             1,
             total,
             false,
-            "sources",
+            "conversations",
         );
+        let mut completed = 0;
         for (index, source) in reports.iter().enumerate() {
             progress.focus_now([source.source.clone()]);
             if matches!(target, SyncTarget::Gmail) {
                 crate::relationships::rebuild_members_from_interactions(crm, &source.source)?;
             }
             crate::relationships::reconcile_source(crm, &source.source)?;
+            completed += counts[index];
             progress.progress_now(
                 "Rebuilding relationship contexts",
-                (index + 1) as u64,
+                completed,
                 total,
                 false,
-                "sources",
+                "conversations",
             );
         }
         progress.finish_stage(
@@ -127,10 +147,24 @@ pub(crate) fn reconcile_with_progress(
             total,
             total,
             false,
-            "sources",
+            "conversations",
         );
     }
     Ok(())
+}
+
+fn dirty_conversation_count(crm: &Connection, source: Option<&str>) -> Result<u64> {
+    let count = match source {
+        Some(source) => crm.query_row(
+            "SELECT COUNT(*) FROM dirty_conversations WHERE source_id=?1",
+            [source],
+            |row| row.get::<_, i64>(0),
+        )?,
+        None => crm.query_row("SELECT COUNT(*) FROM dirty_conversations", [], |row| {
+            row.get::<_, i64>(0)
+        })?,
+    };
+    Ok(count as u64)
 }
 
 pub(crate) fn gmail_backfill_pending(crm: &Connection) -> Result<bool> {
