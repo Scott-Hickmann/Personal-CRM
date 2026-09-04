@@ -114,8 +114,8 @@ function Scene({ graph, visible, focused, layout, fitRequest }: Props) {
 
   const labelObject = useCallback((node: NetworkNode) => {
     if (active && !neighbors.has(node.id)) return new Group();
-    const label = new SpriteText(node.label, 4, dark ? "#fafafa" : "#171717");
-    label.position.y = 8;
+    const label = new SpriteText(node.label, 2, dark ? "#fafafa" : "#171717");
+    label.position.y = 4;
     label.material.depthTest = false;
     label.renderOrder = 1;
     return label;
@@ -134,7 +134,7 @@ function Scene({ graph, visible, focused, layout, fitRequest }: Props) {
       controlType="orbit" backgroundColor={dark ? "#171717" : "#ffffff"}
       showNavInfo={false} enableNodeDrag={false} nodeResolution={8}
       nodeVisibility={(node) => visible.nodes.has(node.id)} linkVisibility={(link) => visible.links.has(link.id)}
-      nodeVal={(node) => (node.size / 4) ** 3} nodeRelSize={2}
+      nodeVal={(node) => (node.size / 4) ** 3} nodeRelSize={1}
       nodeColor={(node) => active && !neighbors.has(node.id) ? (dark ? "rgba(64,64,64,0.15)" : "rgba(212,212,212,0.15)") : node.color}
       nodeLabel={() => ""} nodeThreeObject={labelObject} nodeThreeObjectExtend
       linkColor={(link) => activeLink(link) ? (dark ? "#e5e5e5" : "#404040") : (dark ? "#555555" : "#bbbbbb")}
