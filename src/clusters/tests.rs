@@ -119,6 +119,29 @@ fn big_chats_are_discounted_without_changing_display_counts() {
 }
 
 #[test]
+fn resolution_changes_invalidate_cached_partitions() {
+    let (_directory, connection) = database();
+    let initial = load(&connection).unwrap();
+    assert_eq!(
+        initial.iter().map(|v| v.resolution).collect::<Vec<_>>(),
+        vec![0.5, 1.5, 2.5]
+    );
+    let mut stale = initial[1].clone();
+    stale.resolution = 1.0;
+    stale.clusters.clear();
+    connection
+        .execute(
+            "UPDATE network_cluster_cache SET payload=?1 WHERE level='balanced'",
+            [json(&stale).unwrap()],
+        )
+        .unwrap();
+    let refreshed = load(&connection).unwrap();
+    assert_eq!(refreshed[1].resolution, 1.5);
+    assert!(!refreshed[1].clusters.is_empty());
+    assert_eq!(json(&refreshed[0]).unwrap(), json(&initial[0]).unwrap());
+}
+
+#[test]
 fn cache_names_and_invalidation_round_trip() {
     let (_directory, connection) = database();
     let initial = load(&connection).unwrap();

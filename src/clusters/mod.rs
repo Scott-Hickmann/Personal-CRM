@@ -58,7 +58,7 @@ pub fn load(connection: &Connection) -> Result<Vec<ClusterLevel>> {
         Sha256::digest(format!("leiden-v2:{}", json(&input)?))
     );
     let mut levels = Vec::new();
-    for (level, resolution) in [("broad", 0.5), ("balanced", 1.0), ("detailed", 2.0)] {
+    for (level, resolution) in [("broad", 0.5), ("balanced", 1.5), ("detailed", 2.5)] {
         let cached: Option<(String, String)> = transaction
             .query_row(
                 "SELECT fingerprint,payload FROM network_cluster_cache WHERE level=?1",
@@ -73,6 +73,9 @@ pub fn load(connection: &Connection) -> Result<Vec<ClusterLevel>> {
         let mut result = if cached
             .as_ref()
             .is_some_and(|(hash, _)| hash == &fingerprint)
+            && previous
+                .as_ref()
+                .is_some_and(|v| v.resolution == resolution)
         {
             previous.unwrap()
         } else {

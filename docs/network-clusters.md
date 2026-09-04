@@ -14,7 +14,7 @@ Names persist in the local CRM database, independently of the browser.
 ## Detection and evaluation
 
 The backend uses `leiden-rs` 0.8.1 with modularity, refinement enabled, at most 30
-iterations, and seed 42. Resolution presets are 0.5, 1.0, and 2.0. Input people
+iterations, and seed 42. Resolution presets are 0.5, 1.5, and 2.5. Input people
 and edges are ordered by ID. Connected components are checked after detection so
 disconnected components never share a community. Unconnected contacts and the
 owner are excluded, matching the visible relationship graph.
@@ -35,9 +35,11 @@ have at least two connections to another community accounting for at least 20%
 of their total discounted connection weight. A person can bridge multiple groups
 while retaining one primary membership.
 
-Initial evaluation on the local network produced 27 / 35 / 49 groups, with about
-96% / 90% / 92% cross-seed agreement. The raw-count baseline produced 26 / 31 / 38
-groups. Results may change with subsequent source syncs. The synthetic tests cover
+Evaluation on the local network produced 27 / 38 / 49 groups, with about
+96% / 97% / 94% cross-seed agreement. The raw-count baseline produced 26 / 40 / 42
+groups. Raising Balanced from 1.0 to 1.5 reduced the largest group from 271 to 153
+people; Detailed at 2.5 reduced it further to 96. Broad remains unchanged.
+Results may change with subsequent source syncs. The synthetic tests cover
 known communities, disconnected inputs, repeatability, and large-chat discounting.
 
 ## Naming
@@ -59,7 +61,7 @@ There is no model prompt because no model is called. Custom names take precedenc
 
 `crm cluster list` computes or reads all presets from SQLite. A versioned SHA-256
 fingerprint covers input people, weights, and naming evidence. Unchanged inputs
-reuse the cached result. The browser never runs clustering. The read and cache
+reuse the cached result only when the preset resolution also matches. The browser never runs clustering. The read and cache
 update use a single transaction for a consistent input snapshot.
 
 IDs and colors survive a one-to-one match with at least 50% Jaccard member overlap.
