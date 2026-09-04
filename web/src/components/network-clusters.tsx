@@ -48,7 +48,8 @@ export function NetworkClusters({ level, clusters, selected, onSelect, onRename,
     </details>}
     <details className="border-t pt-3 text-xs text-muted-foreground"><summary className="cursor-pointer">Clustering quality</summary>
       <p className="mt-2">Repeat-run agreement: {Math.round(level.seed_agreement * 100)}%. Within-group connection weight: {Math.round(level.internal_weight_share * 100)}%.</p>
-      <p className="mt-2">Without large-chat discounting: {level.raw_cluster_count} groups, {Math.round(level.raw_weight_agreement * 100)}% membership agreement.</p>
+      <p className="mt-2">Weights include mutual message participation with diminishing returns and a large-chat discount.</p>
+      <p className="mt-2">Shared-thread counts only (no participation boost or large-chat discount): {level.raw_cluster_count} groups, {Math.round(level.raw_weight_agreement * 100)}% membership agreement.</p>
       <p className="mt-2">These measure structure and stability, not whether the group names are correct. Membership stays fixed while searching and filtering.</p>
     </details>
   </aside>;

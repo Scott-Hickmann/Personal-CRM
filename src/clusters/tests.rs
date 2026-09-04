@@ -75,7 +75,7 @@ fn stable_ids_survive_small_changes_but_splits_and_merges_have_lineage() {
     assert_eq!(identity::assign("balanced", &merged, &old)[0].1.len(), 2);
 }
 
-fn database() -> (tempfile::TempDir, Connection) {
+pub(super) fn database() -> (tempfile::TempDir, Connection) {
     let directory = tempfile::tempdir().unwrap();
     let connection = crate::db::open(&directory.path().join("crm.sqlite3")).unwrap();
     connection

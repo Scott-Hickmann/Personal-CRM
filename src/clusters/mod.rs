@@ -5,6 +5,8 @@ mod naming;
 #[cfg(test)]
 mod naming_tests;
 #[cfg(test)]
+mod participation_tests;
+#[cfg(test)]
 mod tests;
 
 use crate::error::{CrmError, Result};
@@ -55,7 +57,7 @@ pub fn load(connection: &Connection) -> Result<Vec<ClusterLevel>> {
     let input = input::load(&transaction)?;
     let fingerprint = format!(
         "{:x}",
-        Sha256::digest(format!("leiden-v2:{}", json(&input)?))
+        Sha256::digest(format!("leiden-v3:{}", json(&input)?))
     );
     let mut levels = Vec::new();
     for (level, resolution) in [("broad", 0.5), ("balanced", 1.5), ("detailed", 2.5)] {

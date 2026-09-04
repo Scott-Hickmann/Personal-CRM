@@ -75,10 +75,20 @@ pub fn load(connection: &Connection) -> Result<Input> {
         }
     }
     let mut weights: BTreeMap<(String, String), f64> = BTreeMap::new();
+    let participation = participation(connection)?;
     for (a, b, source, thread) in &contexts {
         if indices.contains_key(a) && indices.contains_key(b) {
             let count = conversations[&(source.clone(), thread.clone())].len();
-            *weights.entry((a.clone(), b.clone())).or_default() += 1.0 / (count - 1).max(1) as f64;
+            let messages = |person: &String| {
+                participation
+                    .get(&(source.clone(), thread.clone(), person.clone()))
+                    .copied()
+                    .unwrap_or(0)
+            };
+            // Mutual participation is evidence of a shared circle, not direct replies.
+            let boost = (messages(a).min(messages(b)) as f64).ln_1p();
+            *weights.entry((a.clone(), b.clone())).or_default() +=
+                (1.0 + boost) / (count - 1).max(1) as f64;
         }
     }
     let edges = rows
@@ -145,4 +155,21 @@ pub fn load(connection: &Connection) -> Result<Input> {
         edges,
         evidence,
     })
+}
+
+fn participation(connection: &Connection) -> Result<BTreeMap<(String, String, String), i64>> {
+    let mut statement = connection.prepare(
+        "SELECT i.source_id, i.thread_native_id, p.person_id, COUNT(DISTINCT i.id)
+         FROM interactions i JOIN interaction_participants p ON p.interaction_id=i.id
+         WHERE i.deleted_at IS NULL AND i.thread_native_id IS NOT NULL
+           AND p.role='sender' AND p.person_id IS NOT NULL
+           AND NOT EXISTS(SELECT 1 FROM identities own WHERE own.person_id=p.person_id AND own.is_self=1)
+           AND EXISTS(SELECT 1 FROM relationship_contexts r
+                      WHERE r.source_id=i.source_id AND r.thread_native_id=i.thread_native_id)
+         GROUP BY i.source_id, i.thread_native_id, p.person_id
+         ORDER BY i.source_id, i.thread_native_id, p.person_id",
+    )?;
+    Ok(statement
+        .query_map([], |r| Ok(((r.get(0)?, r.get(1)?, r.get(2)?), r.get(3)?)))?
+        .collect::<std::result::Result<_, _>>()?)
 }

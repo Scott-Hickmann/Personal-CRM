@@ -19,15 +19,22 @@ and edges are ordered by ID. Connected components are checked after detection so
 disconnected components never share a community. Unconnected contacts and the
 owner are excluded, matching the visible relationship graph.
 
-Each observed conversation contributes `1 / (participants - 1)` to each pair,
-using distinct eligible people. This discounts large conversations. If an edge
-has no detailed conversation records, its stored context count is the fallback.
+Each observed conversation contributes
+`(1 + ln(1 + min(messages_A, messages_B))) / (participants - 1)` to each pair,
+using distinct eligible people. Message counts are distinct, non-deleted messages
+sent by each person in that source/thread, not recipient appearances or total
+thread traffic. This boosts mutual participation with diminishing returns while
+discounting large conversations. Silent members or missing sender data retain the
+original shared-thread contribution. Direct messages with the owner do not boost
+connections between other people. Co-participation is not evidence of direct replies.
+If an edge has no detailed conversation records, its stored context count is the fallback.
 The original relationship count displayed in the graph is never changed.
 
 Each preset also runs seed 43 and a raw-context-count baseline. The sidebar reports:
 
 - Symmetric best-overlap membership agreement across seeds.
-- Raw-weight community count and agreement with discounted weights.
+- Raw shared-thread-count community count and agreement with participation weights
+  (the baseline has neither the participation boost nor the large-chat discount).
 - Fraction of discounted edge weight inside communities.
 
 These are diagnostics, not confidence in a social interpretation. Bridge people
@@ -35,10 +42,13 @@ have at least two connections to another community accounting for at least 20%
 of their total discounted connection weight. A person can bridge multiple groups
 while retaining one primary membership.
 
-Evaluation on the local network produced 27 / 38 / 49 groups, with about
-96% / 97% / 94% cross-seed agreement. The raw-count baseline produced 26 / 40 / 42
-groups. Raising Balanced from 1.0 to 1.5 reduced the largest group from 271 to 153
-people; Detailed at 2.5 reduced it further to 96. Broad remains unchanged.
+Participation-weighted evaluation on the local network produced 29 / 44 / 56 groups,
+with about 97% / 93% / 91% cross-seed agreement. The raw-count baseline produced
+26 / 40 / 42 groups. At unchanged resolutions, Balanced grew from 38 to 44 groups
+and its largest group shrank from 153 to 126 people; Detailed grew from 49 to 56
+and its largest shrank from 96 to 72. Cross-seed agreement fell from 97% to 93%
+for Balanced and 94% to 91% for Detailed. These results do not establish that the
+new groups are socially more meaningful; that requires reviewing membership.
 Results may change with subsequent source syncs. The synthetic tests cover
 known communities, disconnected inputs, repeatability, and large-chat discounting.
 
