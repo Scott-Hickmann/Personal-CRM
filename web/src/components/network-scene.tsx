@@ -113,13 +113,13 @@ function Scene({ graph, visible, focused, layout, fitRequest }: Props) {
   }, [size.width, size.height]);
 
   const labelObject = useCallback((node: NetworkNode) => {
-    if (!neighbors.has(node.id)) return new Group();
+    if (active && !neighbors.has(node.id)) return new Group();
     const label = new SpriteText(node.label, 4, dark ? "#fafafa" : "#171717");
     label.position.y = 8;
     label.material.depthTest = false;
     label.renderOrder = 1;
     return label;
-  }, [dark, neighbors]);
+  }, [active, dark, neighbors]);
   const edgeObject = useCallback((link: NetworkLink) => {
     if (!activeLink(link)) return new Group();
     const label = new SpriteText(link.label, 2.5, dark ? "#e5e5e5" : "#404040");
