@@ -112,7 +112,7 @@ pub(crate) fn rebind_unresolved_members(connection: &Connection) -> Result<usize
 }
 
 pub(crate) fn reconcile_source(connection: &Connection, source_id: &str) -> Result<usize> {
-    let transaction = connection.unchecked_transaction()?;
+    let transaction = crate::db::immediate_transaction(connection)?;
     let previous = context_versions(&transaction, source_id)?;
     transaction.execute(
         "DELETE FROM relationship_contexts WHERE source_id=?1",

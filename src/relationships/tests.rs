@@ -1,5 +1,8 @@
 use super::*;
 use crate::db;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 fn fixture() -> (tempfile::TempDir, Connection) {
     let directory = tempfile::tempdir().unwrap();
@@ -126,4 +129,26 @@ fn removing_the_last_context_removes_the_relationship() {
         .query_row("SELECT COUNT(*) FROM relationships", [], |row| row.get(0))
         .unwrap();
     assert_eq!(count, 0);
+}
+
+#[test]
+fn reconciliation_waits_for_an_active_writer_before_reading() {
+    let (directory, connection) = fixture();
+    let active = db::immediate_transaction(&connection).unwrap();
+    active
+        .execute("UPDATE sources SET status='syncing' WHERE id='source'", [])
+        .unwrap();
+
+    let path = directory.path().join("crm.sqlite3");
+    let (started_tx, started_rx) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        let waiting = db::open(&path).unwrap();
+        started_tx.send(()).unwrap();
+        reconcile_source(&waiting, "source")
+    });
+    started_rx.recv().unwrap();
+    thread::sleep(Duration::from_millis(100));
+    active.commit().unwrap();
+
+    worker.join().unwrap().unwrap();
 }
