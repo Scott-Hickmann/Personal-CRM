@@ -5,7 +5,7 @@ umask 077
 mkdir -p .local
 if [ "${1:-}" != "--demo" ]; then
     if [ ! -x .local/contacts ] || [ contacts.swift -nt .local/contacts ] || [ face_crop.swift -nt .local/contacts ] || [ Info.plist -nt .local/contacts ]; then
-        swiftc -parse-as-library contacts.swift face_crop.swift -o .local/contacts.new -framework Contacts -framework Vision -framework ImageIO -framework UniformTypeIdentifiers \
+        swiftc -parse-as-library contacts.swift face_crop.swift -o .local/contacts.new -framework Contacts -framework AddressBook -framework Vision -framework ImageIO -framework UniformTypeIdentifiers \
             -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$PWD/Info.plist"
         codesign --force --identifier com.personal-crm.photo-review \
             --sign "${PERSONAL_CRM_CODESIGN_IDENTITY:-Personal CRM}" --timestamp=none .local/contacts.new

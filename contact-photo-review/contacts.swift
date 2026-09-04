@@ -1,5 +1,6 @@
 import Contacts
 import CryptoKit
+import AddressBook
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
@@ -30,10 +31,15 @@ let keys: [CNKeyDescriptor] = [CNContactIdentifierKey as CNKeyDescriptor,
     CNContactFormatter.descriptorForRequiredKeys(for: .fullName),
     CNContactOrganizationNameKey as CNKeyDescriptor, CNContactJobTitleKey as CNKeyDescriptor,
     CNContactEmailAddressesKey as CNKeyDescriptor, CNContactPhoneNumbersKey as CNKeyDescriptor,
-    CNContactImageDataAvailableKey as CNKeyDescriptor, CNContactImageDataKey as CNKeyDescriptor]
+    CNContactImageDataAvailableKey as CNKeyDescriptor, CNContactImageDataKey as CNKeyDescriptor,
+    CNContactThumbnailImageDataKey as CNKeyDescriptor]
 
-func fetch(_ store: CNContactStore, id: String? = nil, backup: Bool = false) throws -> [CNContact] {
-    let request = CNContactFetchRequest(keysToFetch: keys + (backup ? [CNContactVCardSerialization.descriptorForRequiredKeys()] : []))
+func hasPhoto(_ contact: CNContact) -> Bool {
+    contact.imageDataAvailable || contact.imageData != nil || contact.thumbnailImageData != nil
+}
+
+func fetch(_ store: CNContactStore, id: String? = nil) throws -> [CNContact] {
+    let request = CNContactFetchRequest(keysToFetch: keys)
     // Keep concrete record IDs: a unified save can propagate to linked cards.
     request.unifyResults = false
     if let id { request.predicate = CNContact.predicateForContacts(withIdentifiers: [id]) }
@@ -84,17 +90,14 @@ func normalize(_ input: [String: String]) throws {
               "automatic": cropCoordinates(rect)])
 }
 
-func prepareApproval(_ contact: CNContact, _ input: [String: String], _ data: Data) throws -> CNMutableContact {
+func validateApproval(_ contact: CNContact, _ input: [String: String], _ data: Data) throws {
     try require(contact.identifier == input["id"], "Contact identifier changed; refresh")
     try require(identity(contact)["fingerprint"] == input["fingerprint"], "Contact details changed; refresh and review again")
-    try require(!contact.imageDataAvailable && contact.imageData == nil, "Contact already has a photo; refusing to overwrite")
+    try require(!hasPhoto(contact), "Contact already has a photo; refusing to overwrite")
     try require(digest(data) == input["sha256"], "Approved image changed; review it again")
     guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { throw Failure(message: "Invalid photo") }
     try require(CGImageSourceGetType(source) as String? == UTType.jpeg.identifier && data.count <= 10_000_000,
                 "Photo must be a normalized JPEG")
-    let mutable = contact.mutableCopy() as! CNMutableContact
-    mutable.imageData = data
-    return mutable
 }
 
 func mainCommand() throws {
@@ -111,7 +114,7 @@ func mainCommand() throws {
     try require(allowed, "Allow Contacts access in System Settings → Privacy & Security → Contacts, then retry.")
     if command == "list" {
         let records = try fetch(store)
-        let missing = records.filter { !$0.imageDataAvailable && $0.imageData == nil }
+        let missing = records.filter { !hasPhoto($0) }
         try emit(["contacts": missing.map(identity).sorted { $0["name"]! < $1["name"]! }, "total": records.count])
         return
     }
@@ -120,18 +123,22 @@ func mainCommand() throws {
         throw Failure(message: "Incomplete approval")
     }
     let data = try Data(contentsOf: URL(fileURLWithPath: file))
-    let records = try fetch(store, id: id, backup: true)
+    let records = try fetch(store, id: id)
     try require(records.count == 1 && records[0].identifier == id, "Contact disappeared or is ambiguous; refresh")
     let contact = records[0]
-    let mutable = try prepareApproval(contact, input, data)
+    try validateApproval(contact, input, data)
+    guard let book = ABAddressBook.shared(),
+          let person = book.record(forUniqueId: id) as? ABPerson else {
+        throw Failure(message: "Contact could not be opened for a photo-only update; refresh")
+    }
+    try require(person.imageData() == nil, "Contact already has a photo; refusing to overwrite")
     let backup = URL(fileURLWithPath: backupPath)
     try require(!FileManager.default.fileExists(atPath: backup.path), "Backup already exists; refresh before retrying")
-    try CNContactVCardSerialization.data(with: [contact]).write(to: backup, options: .withoutOverwriting)
-    let request = CNSaveRequest()
-    request.update(mutable)
-    try store.execute(request)
+    try person.vCardRepresentation().write(to: backup, options: .withoutOverwriting)
+    try require(person.setImageData(data), "Address Book rejected the photo")
+    try book.saveAndReturnError()
     let saved = try fetch(store, id: id)
-    try require(saved.count == 1 && saved[0].imageDataAvailable, "Save returned but photo could not be verified; inspect Contacts before retrying")
+    try require(saved.count == 1 && hasPhoto(saved[0]), "Save returned but photo could not be verified; inspect Contacts before retrying")
     try emit(["saved": true, "id": id])
 }
 // The test build exercises native mutation guards using in-memory contacts only.

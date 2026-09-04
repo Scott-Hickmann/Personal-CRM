@@ -73,19 +73,20 @@ import UniformTypeIdentifiers
         contact.organizationName = "Original Organization"
         contact.note = "Must be preserved"
         contact.emailAddresses = [CNLabeledValue(label: CNLabelWork, value: "test@example.com" as NSString)]
+        precondition(!hasPhoto(contact))
         let input = ["id": contact.identifier, "fingerprint": identity(contact)["fingerprint"]!, "sha256": digest(photo)]
-        let changed = try prepareApproval(contact, input, photo)
-        precondition(changed.imageData == photo && contact.imageData == nil)
-        precondition(changed.note == contact.note && changed.emailAddresses == contact.emailAddresses)
-        precondition(changed.organizationName == contact.organizationName && changed.identifier == contact.identifier)
+        try validateApproval(contact, input, photo)
+        precondition(contact.imageData == nil)
 
         func rejected(_ candidate: CNContact, _ input: [String: String], _ data: Data) throws {
             do {
-                _ = try prepareApproval(candidate, input, data)
+                try validateApproval(candidate, input, data)
                 throw NSError(domain: "Test unexpectedly accepted unsafe save", code: 1)
             } catch is Failure { /* Expected guard rejection. */ }
         }
-        try rejected(changed, input, photo) // Existing photo.
+        let withPhoto = contact.mutableCopy() as! CNMutableContact
+        withPhoto.imageData = photo
+        try rejected(withPhoto, input, photo) // Existing photo.
         contact.organizationName = "Edited since review"
         try rejected(contact, input, photo)
         contact.organizationName = "Original Organization"
