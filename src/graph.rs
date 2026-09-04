@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use rusqlite::{Connection, params};
 use serde::Serialize;
 
-use crate::error::{CrmError, Result};
+use crate::error::Result;
 
 #[derive(Debug, Serialize)]
 pub struct ConnectionGraph {
@@ -23,8 +23,6 @@ pub struct GraphNode {
 pub struct GraphEdge {
     pub source: String,
     pub target: String,
-    pub relationship_type: String,
-    pub classification_confidence: f64,
     pub shared_context_count: i64,
 }
 
@@ -33,24 +31,12 @@ struct RelationshipRow {
     source_name: String,
     target_id: String,
     target_name: String,
-    relationship_type: String,
-    classification_confidence: f64,
     shared_context_count: i64,
 }
 
-pub fn build(
-    connection: &Connection,
-    person_id: Option<&str>,
-    min_confidence: f64,
-) -> Result<ConnectionGraph> {
-    if !(0.0..=1.0).contains(&min_confidence) {
-        return Err(CrmError::InvalidConfig(
-            "minimum confidence must be between 0 and 1".into(),
-        ));
-    }
+pub fn build(connection: &Connection, person_id: Option<&str>) -> Result<ConnectionGraph> {
     let base = "SELECT r.source_person_id, source.display_name, r.target_person_id,
-                target.display_name, r.relationship_type,
-                COALESCE(r.classification_confidence, 0.0), r.shared_context_count
+                target.display_name, r.shared_context_count
                 FROM relationships r
                 JOIN people source ON source.id=r.source_person_id AND source.lifecycle_state='active'
                 JOIN people target ON target.id=r.target_person_id AND target.lifecycle_state='active'";
@@ -58,20 +44,16 @@ pub fn build(
         collect(
             connection,
             &format!(
-                "{base} WHERE COALESCE(r.classification_confidence, 0.0) >= ?1
-                 AND (r.source_person_id=?2 OR r.target_person_id=?2)
-                 ORDER BY r.classification_confidence DESC"
+                "{base} WHERE r.source_person_id=?1 OR r.target_person_id=?1
+                 ORDER BY r.shared_context_count DESC"
             ),
-            params![min_confidence, person_id],
+            params![person_id],
         )?
     } else {
         collect(
             connection,
-            &format!(
-                "{base} WHERE COALESCE(r.classification_confidence, 0.0) >= ?1
-                 ORDER BY r.classification_confidence DESC"
-            ),
-            [min_confidence],
+            &format!("{base} ORDER BY r.shared_context_count DESC"),
+            [],
         )?
     };
     assemble(rows)
@@ -90,9 +72,7 @@ fn collect<P: rusqlite::Params>(
                 source_name: row.get(1)?,
                 target_id: row.get(2)?,
                 target_name: row.get(3)?,
-                relationship_type: row.get(4)?,
-                classification_confidence: row.get(5)?,
-                shared_context_count: row.get(6)?,
+                shared_context_count: row.get(4)?,
             })
         })?
         .collect::<std::result::Result<_, _>>()?)
@@ -122,8 +102,6 @@ fn assemble(rows: Vec<RelationshipRow>) -> Result<ConnectionGraph> {
         .map(|row| GraphEdge {
             source: identifiers[&row.source_id].clone(),
             target: identifiers[&row.target_id].clone(),
-            relationship_type: row.relationship_type,
-            classification_confidence: row.classification_confidence,
             shared_context_count: row.shared_context_count,
         })
         .collect::<Vec<_>>();
@@ -133,11 +111,8 @@ fn assemble(rows: Vec<RelationshipRow>) -> Result<ConnectionGraph> {
     }
     for edge in &edges {
         lines.push(format!(
-            "    {} -- \"{} {:.0}%\" --- {}",
-            edge.source,
-            escape(&edge.relationship_type),
-            edge.classification_confidence * 100.0,
-            edge.target
+            "    {} -- \"{} shared\" --- {}",
+            edge.source, edge.shared_context_count, edge.target
         ));
     }
     Ok(ConnectionGraph {

@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 use crate::affinity_calibration::{Calibration, CalibrationPoint, target_score};
 use crate::error::Result;
 use crate::progress::ProgressTracker;
-use crate::relationship_signals::{self, RelationalComponents};
+
+mod dirty;
+pub(crate) use dirty::{mark_all_dirty, mark_dirty_for_sources};
 
 #[derive(Debug, Serialize)]
 pub struct ScoreExplanation {
@@ -16,7 +18,6 @@ pub struct ScoreExplanation {
     pub affinity_tier: String,
     pub activity_state: String,
     pub behavioral_score: f64,
-    pub relational_score: f64,
     pub closeness_rating: Option<i64>,
     pub calibration: Calibration,
     pub components: Components,
@@ -34,19 +35,23 @@ pub struct Components {
     pub days_since_last: Option<f64>,
     pub relationship_span_days: f64,
     pub base_score: f64,
-    pub relational: RelationalComponents,
 }
 
 struct Candidate {
     person_id: String,
     behavioral_score: f64,
-    relational_score: f64,
     components: Components,
 }
 
 pub fn recalculate_all(connection: &Connection, progress: &mut ProgressTracker) -> Result<usize> {
+    mark_all_dirty(connection, "full recalculation")?;
+    recalculate_dirty(connection, progress)
+}
+
+pub fn recalculate_dirty(connection: &Connection, progress: &mut ProgressTracker) -> Result<usize> {
     let mut statement = connection.prepare(
-        "SELECT id, display_name FROM people p WHERE p.lifecycle_state='active' AND NOT EXISTS
+        "SELECT p.id, p.display_name FROM people p JOIN dirty_people d ON d.person_id=p.id
+         WHERE p.lifecycle_state='active' AND NOT EXISTS
          (SELECT 1 FROM identities i WHERE i.person_id=p.id AND i.is_self=1 AND i.active=1)",
     )?;
     let people: Vec<(String, String)> = statement
@@ -77,6 +82,10 @@ pub fn recalculate_all(connection: &Connection, progress: &mut ProgressTracker) 
             &calibration,
             ratings.get(&candidate.person_id).copied(),
         )?;
+        connection.execute(
+            "DELETE FROM dirty_people WHERE person_id=?1",
+            [&candidate.person_id],
+        )?;
         progress.progress(
             "Recalculating relationship scores",
             (index + 1) as u64,
@@ -100,12 +109,12 @@ pub fn explain(connection: &Connection, person_id: &str) -> Result<ScoreExplanat
     let stored = connection
         .query_row(
             "SELECT p.id, p.display_name, p.affinity_score, p.affinity_tier, p.activity_state,
-                    m.behavioral_score, m.relational_score, m.components_json, ar.rating
+                    m.behavioral_score, m.components_json, ar.rating
              FROM people p JOIN metrics m ON m.person_id=p.id
              LEFT JOIN affinity_ratings ar ON ar.person_id=p.id WHERE p.id=?1",
             [person_id],
             |row| {
-                let components: String = row.get(7)?;
+                let components: String = row.get(6)?;
                 Ok(ScoreExplanation {
                     person_id: row.get(0)?,
                     display_name: row.get(1)?,
@@ -113,12 +122,11 @@ pub fn explain(connection: &Connection, person_id: &str) -> Result<ScoreExplanat
                     affinity_tier: row.get(3)?,
                     activity_state: row.get(4)?,
                     behavioral_score: row.get(5)?,
-                    relational_score: row.get(6)?,
-                    closeness_rating: row.get(8)?,
+                    closeness_rating: row.get(7)?,
                     calibration: calibration.clone(),
                     components: serde_json::from_str(&components).map_err(|error| {
                         rusqlite::Error::FromSqlConversionFailure(
-                            7,
+                            6,
                             rusqlite::types::Type::Text,
                             Box::new(error),
                         )
@@ -148,7 +156,6 @@ pub fn explain(connection: &Connection, person_id: &str) -> Result<ScoreExplanat
         affinity_tier: tier(affinity_score).into(),
         activity_state: activity(candidate.components.days_since_last).into(),
         behavioral_score: candidate.behavioral_score,
-        relational_score: candidate.relational_score,
         closeness_rating: rating,
         calibration,
         components: candidate.components,
@@ -184,22 +191,14 @@ fn calculate_candidate(connection: &Connection, person_id: &str) -> Result<Candi
                 days_since_last: row.get(7)?,
                 relationship_span_days: row.get(8)?,
                 base_score: 0.0,
-                relational: RelationalComponents::default(),
             })
         },
     )?;
     let behavioral_score = behavioral_score(&components);
-    let (relational_score, relational) = relationship_signals::aggregate(connection, person_id)?;
-    components.relational = relational;
-    components.base_score = base_affinity(
-        behavioral_score,
-        relational_score,
-        components.relational.assessed_interactions,
-    );
+    components.base_score = behavioral_score;
     Ok(Candidate {
         person_id: person_id.into(),
         behavioral_score,
-        relational_score,
         components,
     })
 }
@@ -222,12 +221,6 @@ fn behavioral_score(components: &Components) -> f64 {
     let duration = saturate(components.relationship_span_days, 730.0) * 10.0;
     (recent_volume + annual_volume + consistency + channels + balance + recency + duration)
         .clamp(0.0, 100.0)
-}
-
-fn base_affinity(behavioral: f64, relational: f64, assessed_interactions: i64) -> f64 {
-    let coverage = 1.0 - (-(assessed_interactions as f64) / 10.0).exp();
-    let relational_weight = 0.35 * coverage;
-    behavioral * (1.0 - relational_weight) + relational * relational_weight
 }
 
 fn fit_calibration(candidates: &[Candidate], ratings: &HashMap<String, i64>) -> Calibration {
@@ -290,15 +283,13 @@ fn persist(
     let components_json = serde_json::to_string(&candidate.components)
         .map_err(|error| crate::error::CrmError::Serialization(error.to_string()))?;
     connection.execute(
-        "INSERT INTO metrics(person_id, behavioral_score, relational_score, components_json, model_version)
-         VALUES (?1, ?2, ?3, ?4, 'hybrid-v1')
+        "INSERT INTO metrics(person_id, behavioral_score, components_json)
+         VALUES (?1, ?2, ?3)
          ON CONFLICT(person_id) DO UPDATE SET behavioral_score=excluded.behavioral_score,
-         relational_score=excluded.relational_score, components_json=excluded.components_json,
-         model_version=excluded.model_version, calculated_at=CURRENT_TIMESTAMP",
+         components_json=excluded.components_json, calculated_at=CURRENT_TIMESTAMP",
         params![
             candidate.person_id,
             candidate.behavioral_score,
-            candidate.relational_score,
             components_json
         ],
     )?;

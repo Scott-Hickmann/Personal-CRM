@@ -114,7 +114,7 @@ fn render(frame: &mut Frame, status: &Status, scroll: u16) {
 
     render_header(frame, sections[0], status);
     render_summary(frame, sections[1], status);
-    render_jobs(frame, sections[2], status);
+    render_work(frame, sections[2], status);
     if !compact {
         render_sources(frame, sections[3], status);
         render_events(frame, sections[4], status, scroll);
@@ -151,20 +151,16 @@ fn render_summary(frame: &mut Frame, area: Rect, status: &Status) {
         Line::from(vec![
             metric("CONTACTS", status.total_contacts, Color::Cyan),
             Span::raw("   "),
-            metric(
-                "ANALYZABLE",
-                status.total_analyzable_interactions,
-                Color::Magenta,
-            ),
-            Span::raw("   "),
-            metric("ANALYZED", status.analyzed_interactions, Color::Green),
+            metric("INTERACTIONS", status.total_interactions, Color::Magenta),
         ]),
         Line::from(vec![
-            metric("QUEUED", status.queued_jobs, Color::Yellow),
+            metric("PENDING", status.pending_work, Color::Yellow),
             Span::raw("   "),
-            metric("RUNNING", status.running_jobs, Color::Cyan),
+            metric("RUNNING", status.running_work, Color::Cyan),
             Span::raw("   "),
-            metric("FAILED", status.failed_jobs, Color::Red),
+            metric("FAILED", status.failed_work, Color::Red),
+            Span::raw("   "),
+            metric("DIRTY", status.dirty_people, Color::Magenta),
             Span::raw("   "),
             metric("REVIEWS", status.pending_reviews, Color::Blue),
         ]),
@@ -184,7 +180,7 @@ fn metric(label: &'static str, value: i64, color: Color) -> Span<'static> {
     )
 }
 
-fn render_jobs(frame: &mut Frame, area: Rect, status: &Status) {
+fn render_work(frame: &mut Frame, area: Rect, status: &Status) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Current activity ");
@@ -205,16 +201,16 @@ fn render_jobs(frame: &mut Frame, area: Rect, status: &Status) {
         .iter()
         .map(|progress| Constraint::Length(3 + visible_focus_len(progress) as u16))
         .collect::<Vec<_>>();
-    for (progress, job_area) in status.running_activity.iter().zip(
+    for (progress, work_area) in status.running_activity.iter().zip(
         Layout::new(Direction::Vertical, heights)
             .split(inner)
             .iter(),
     ) {
-        render_job(frame, *job_area, progress);
+        render_work_item(frame, *work_area, progress);
     }
 }
 
-fn render_job(frame: &mut Frame, area: Rect, progress: &ProgressSnapshot) {
+fn render_work_item(frame: &mut Frame, area: Rect, progress: &ProgressSnapshot) {
     let sections = Layout::vertical([
         Constraint::Length(3),
         Constraint::Length(visible_focus_len(progress) as u16),
@@ -239,7 +235,7 @@ fn render_job(frame: &mut Frame, area: Rect, progress: &ProgressSnapshot) {
     );
     let title = format!(
         " {}  {} ",
-        progress.job_kind.as_deref().unwrap_or("job"),
+        progress.work_kind.as_deref().unwrap_or("work"),
         progress.message
     );
     frame.render_widget(
@@ -349,8 +345,7 @@ mod tests {
         let mut status = super::super::initialized("config.toml".into(), "crm.sqlite3".into(), 10);
         status.daemon_running = true;
         status.total_contacts = 765;
-        status.total_analyzable_interactions = 5_274;
-        status.analyzed_interactions = 4_359;
+        status.total_interactions = 5_274;
         status.running_activity.push(ProgressSnapshot {
             state: "running".into(),
             message: "Reading WhatsApp conversations".into(),
@@ -373,8 +368,7 @@ mod tests {
         let screen = terminal.backend().to_string();
         assert!(screen.contains("Reading WhatsApp conversations"));
         assert!(screen.contains("CONTACTS 765"));
-        assert!(screen.contains("ANALYZABLE 5274"));
-        assert!(screen.contains("ANALYZED 4359"));
+        assert!(screen.contains("INTERACTIONS 5274"));
         assert!(screen.contains("25 / 100 messages"));
         assert!(screen.contains("stage 2 / 4"));
         assert!(screen.contains("Alex · WhatsApp · incoming · Sep 3"));

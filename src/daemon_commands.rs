@@ -4,17 +4,15 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration as StdDuration;
 
-use rusqlite::OptionalExtension;
-
+use crate::coordinator::{self, WorkKind};
 use crate::error::{CrmError, Result};
-use crate::jobs::{self, JobKind};
 use crate::output::{self, Format};
 use crate::{commands, review};
 
 const LABEL: &str = "com.personal-crm.daemon";
 
 pub fn start(format: Format, config_path: PathBuf) -> Result<()> {
-    jobs::run(&config_path, JobKind::Contacts)?;
+    coordinator::run_now(&config_path, WorkKind::Contacts)?;
     let connection = commands::open_database(&config_path)?;
     let pending = review::pending_migration_count(&connection)?;
     if pending > 0 {
@@ -67,7 +65,7 @@ pub fn stop(format: Format, config_path: PathBuf) -> Result<()> {
         return Err(CrmError::InvalidConfig("CRM daemon is not running".into()));
     }
     let connection = commands::open_database(&config_path)?;
-    let recovered = jobs::recover_running(&connection)?;
+    let recovered = coordinator::recover_interrupted(&connection)?;
     crate::progress::record_interrupted(&config_path, recovered);
     connection.execute(
         "UPDATE daemon_state SET pid=NULL, stopped_at=CURRENT_TIMESTAMP WHERE id=1",
@@ -81,7 +79,7 @@ pub fn stop(format: Format, config_path: PathBuf) -> Result<()> {
     )
 }
 
-pub fn run_job(format: Format, config_path: PathBuf, kind: JobKind) -> Result<()> {
+pub fn run_work(format: Format, config_path: PathBuf, kind: WorkKind) -> Result<()> {
     let connection = commands::open_database(&config_path)?;
     let pid: Option<i64> = connection.query_row(
         "SELECT pid FROM daemon_state WHERE id=1 UNION ALL SELECT NULL LIMIT 1",
@@ -89,50 +87,43 @@ pub fn run_job(format: Format, config_path: PathBuf, kind: JobKind) -> Result<()
         |row| row.get(0),
     )?;
     if pid.is_some_and(crate::daemon::process_is_running) {
-        jobs::enqueue(
+        if kind == WorkKind::Scoring {
+            crate::scoring::mark_all_dirty(&connection, "manual scoring run")?;
+        }
+        let generation = coordinator::request(
             &connection,
             kind,
             "manual run requested",
             chrono::Duration::zero(),
         )?;
-        wait_for_job(&connection, kind, pid.unwrap())?;
+        wait_for_work(&connection, kind, generation, pid.unwrap())?;
     } else {
-        jobs::run(&config_path, kind)?;
+        coordinator::run_now(&config_path, kind)?;
     }
     output::emit(
         format,
         "run",
-        serde_json::json!({"job": kind, "complete": true}),
+        serde_json::json!({"work": kind, "complete": true}),
         format!("{} complete", kind.as_str()),
     )
 }
 
-fn wait_for_job(connection: &rusqlite::Connection, kind: JobKind, daemon_pid: i64) -> Result<()> {
+fn wait_for_work(
+    connection: &rusqlite::Connection,
+    kind: WorkKind,
+    generation: i64,
+    daemon_pid: i64,
+) -> Result<()> {
     loop {
-        let current: Option<(String, Option<String>)> = connection
-            .query_row(
-                "SELECT state, error FROM jobs WHERE kind=?1 ORDER BY id DESC LIMIT 1",
-                [kind.as_str()],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
-        match current {
-            Some((state, _)) if matches!(state.as_str(), "queued" | "running") => {
-                if !crate::daemon::process_is_running(daemon_pid) {
-                    return Err(CrmError::InvalidConfig(
-                        "CRM daemon stopped while waiting for the job".into(),
-                    ));
-                }
-                thread::sleep(StdDuration::from_millis(250));
-            }
-            Some((state, error)) if state == "failed" => {
-                return Err(CrmError::InvalidConfig(
-                    error.unwrap_or_else(|| format!("{} job failed", kind.as_str())),
-                ));
-            }
-            Some(_) => return Ok(()),
-            None => thread::sleep(StdDuration::from_millis(250)),
+        if coordinator::completed(connection, kind, generation)? {
+            return Ok(());
         }
+        if !crate::daemon::process_is_running(daemon_pid) {
+            return Err(CrmError::InvalidConfig(
+                "CRM daemon stopped while waiting for work".into(),
+            ));
+        }
+        thread::sleep(StdDuration::from_millis(250));
     }
 }
 

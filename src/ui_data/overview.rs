@@ -46,7 +46,7 @@ pub fn load(connection: &Connection) -> Result<Overview> {
         .collect::<std::result::Result<_, _>>()?;
     Ok(Overview {
         people,
-        graph: graph::build(connection, None, 0.0)?,
+        graph: graph::build(connection, None)?,
     })
 }
 
@@ -71,11 +71,10 @@ mod tests {
              INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state)
              VALUES ('other', 'Blair', 'apple-blair', 'active');
              INSERT INTO relationships(
-                 id, source_person_id, target_person_id, relationship_type,
-                 classification_confidence, classification_state,
+                 id, source_person_id, target_person_id,
                  first_observed_at, last_observed_at, shared_context_count
              ) VALUES (
-                 'relationship', 'other', 'person', 'friend', 0.9, 'complete',
+                 'relationship', 'other', 'person',
                  '2026-01-01', '2026-01-01', 1
              );",
             )

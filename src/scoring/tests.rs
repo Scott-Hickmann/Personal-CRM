@@ -37,9 +37,3 @@ fn tiers_and_activity_have_explicit_boundaries() {
     assert_eq!(activity(Some(91.0)), "dormant");
     assert_eq!(activity(None), "never");
 }
-
-#[test]
-fn model_evidence_gains_weight_as_assessed_coverage_grows() {
-    assert_eq!(base_affinity(60.0, 0.0, 0), 60.0);
-    assert!(base_affinity(60.0, 90.0, 20) > base_affinity(60.0, 90.0, 1));
-}

@@ -5,7 +5,7 @@ use crate::{repository, scoring};
 
 use super::{
     Cadence, Followup, ImportantDate, InteractionBody, InteractionPreview, PersonDetail, PhotoLink,
-    Relationship, SemanticSummary, attachments, json,
+    Relationship, attachments,
 };
 
 pub fn load(connection: &Connection, reference: &str, limit: u32) -> Result<PersonDetail> {
@@ -24,7 +24,6 @@ pub fn load(connection: &Connection, reference: &str, limit: u32) -> Result<Pers
         important_dates: important_dates(connection, &person_id)?,
         followups: followups(connection, &person_id)?,
         cadence: cadence(connection, &person_id)?,
-        summaries: summaries(connection, &person_id)?,
         photo: photo(connection, &person_id)?,
     })
 }
@@ -97,15 +96,13 @@ fn relationships(connection: &Connection, person_id: &str) -> Result<Vec<Relatio
         "SELECT r.id,
                 CASE WHEN r.source_person_id=?1 THEN target.id ELSE source.id END,
                 CASE WHEN r.source_person_id=?1 THEN target.display_name ELSE source.display_name END,
-                r.relationship_type, COALESCE(r.classification_confidence, 0.0),
-                r.classification_state, r.classification_evidence,
-                r.evidence_message_ids_json, r.shared_context_count,
+                r.shared_context_count,
                 r.first_observed_at, r.last_observed_at
          FROM relationships r
          JOIN people source ON source.id=r.source_person_id
          JOIN people target ON target.id=r.target_person_id
          WHERE r.source_person_id=?1 OR r.target_person_id=?1
-         ORDER BY r.classification_confidence DESC, r.last_observed_at DESC",
+         ORDER BY r.shared_context_count DESC, r.last_observed_at DESC",
     )?;
     Ok(statement
         .query_map([person_id], |row| {
@@ -113,14 +110,9 @@ fn relationships(connection: &Connection, person_id: &str) -> Result<Vec<Relatio
                 id: row.get(0)?,
                 person_id: row.get(1)?,
                 display_name: row.get(2)?,
-                relationship_type: row.get(3)?,
-                classification_confidence: row.get(4)?,
-                classification_state: row.get(5)?,
-                classification_evidence: row.get(6)?,
-                evidence_message_ids: json(row.get(7)?),
-                shared_context_count: row.get(8)?,
-                first_observed_at: row.get(9)?,
-                last_observed_at: row.get(10)?,
+                shared_context_count: row.get(3)?,
+                first_observed_at: row.get(4)?,
+                last_observed_at: row.get(5)?,
             })
         })?
         .collect::<std::result::Result<_, _>>()?)
@@ -173,23 +165,6 @@ fn cadence(connection: &Connection, person_id: &str) -> Result<Option<Cadence>> 
             },
         )
         .optional()?)
-}
-
-fn summaries(connection: &Connection, person_id: &str) -> Result<Vec<SemanticSummary>> {
-    let mut statement = connection.prepare(
-        "SELECT id, summary, model_version, created_at FROM semantic_chunks
-         WHERE person_id=?1 AND summary IS NOT NULL ORDER BY created_at DESC LIMIT 20",
-    )?;
-    Ok(statement
-        .query_map([person_id], |row| {
-            Ok(SemanticSummary {
-                id: row.get(0)?,
-                summary: row.get(1)?,
-                model_version: row.get(2)?,
-                created_at: row.get(3)?,
-            })
-        })?
-        .collect::<std::result::Result<_, _>>()?)
 }
 
 fn photo(connection: &Connection, person_id: &str) -> Result<Option<PhotoLink>> {

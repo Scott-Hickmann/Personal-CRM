@@ -42,7 +42,6 @@ pub struct PersonDetail {
     pub important_dates: Vec<ImportantDate>,
     pub followups: Vec<Followup>,
     pub cadence: Option<Cadence>,
-    pub summaries: Vec<SemanticSummary>,
     pub photo: Option<PhotoLink>,
 }
 
@@ -78,11 +77,6 @@ pub struct Relationship {
     pub id: String,
     pub person_id: String,
     pub display_name: String,
-    pub relationship_type: String,
-    pub classification_confidence: f64,
-    pub classification_state: String,
-    pub classification_evidence: String,
-    pub evidence_message_ids: serde_json::Value,
     pub shared_context_count: i64,
     pub first_observed_at: Option<String>,
     pub last_observed_at: Option<String>,
@@ -112,14 +106,6 @@ pub struct Cadence {
 }
 
 #[derive(Debug, Serialize)]
-pub struct SemanticSummary {
-    pub id: String,
-    pub summary: String,
-    pub model_version: String,
-    pub created_at: String,
-}
-
-#[derive(Debug, Serialize)]
 pub struct PhotoLink {
     pub photos_name: Option<String>,
     pub photos_asset_id: Option<String>,
@@ -134,10 +120,6 @@ fn separated(value: String) -> Vec<String> {
         .filter(|part| !part.is_empty())
         .map(str::to_owned)
         .collect()
-}
-
-fn json(value: String) -> serde_json::Value {
-    serde_json::from_str(&value).unwrap_or(serde_json::Value::Null)
 }
 
 fn attachments(connection: &Connection, interaction_id: &str) -> Result<Vec<Attachment>> {

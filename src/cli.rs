@@ -183,12 +183,6 @@ pub(crate) struct HistoryArgs {
 #[derive(Args)]
 pub(crate) struct GraphArgs {
     pub person: Option<String>,
-    #[arg(
-        long,
-        default_value_t = 0.0,
-        help = "Minimum classification confidence"
-    )]
-    pub min_confidence: f64,
 }
 
 #[derive(Args)]
@@ -207,7 +201,7 @@ pub(crate) struct ReviewArgs {
 #[derive(Args)]
 pub(crate) struct RunArgs {
     #[arg(value_enum)]
-    pub job: crate::jobs::JobKind,
+    pub work: crate::coordinator::WorkKind,
 }
 
 #[derive(Subcommand)]

@@ -31,7 +31,7 @@ pub(crate) fn run(format: Format, config: Option<PathBuf>, command: Command) -> 
         Command::Stop => crate::daemon_commands::stop(format, config_path),
         Command::Status(args) => crate::status_commands::run(format, config_path, args),
         Command::Review(args) => crate::review_commands::run(format, config_path, args),
-        Command::Run(args) => crate::daemon_commands::run_job(format, config_path, args.job),
+        Command::Run(args) => crate::daemon_commands::run_work(format, config_path, args.work),
         Command::Daemon => crate::daemon::run(config_path),
         Command::Person { command } => person(format, config_path, command),
         Command::Note { command } => note(format, config_path, command),

@@ -63,16 +63,12 @@ pub(super) fn persist_message(
         }),
         &run_at,
     )?;
-    for table in ["interaction_participants", "attachments", "mentions"] {
+    for table in ["interaction_participants", "attachments"] {
         crm.execute(
             &format!("DELETE FROM {table} WHERE interaction_id=?1"),
             [&interaction_id],
         )?;
     }
-    crm.execute(
-        "DELETE FROM semantic_chunks WHERE id=?1",
-        [format!("interaction:{interaction_id}")],
-    )?;
     let from_addresses: HashSet<_> = addresses(&header(message, "From").unwrap_or_default())
         .into_iter()
         .collect();
@@ -100,10 +96,6 @@ pub(super) fn persist_message(
         )?;
     }
     import_attachments(crm, &interaction_id, &message.id, &message.payload)?;
-    crm.execute(
-        "UPDATE interactions SET analysis_state='pending' WHERE id=?1",
-        [&interaction_id],
-    )?;
     Ok(())
 }
 
@@ -119,19 +111,12 @@ pub(super) fn discard_message(crm: &Connection, source_id: &str, native_id: &str
     let Some(interaction_id) = interaction_id else {
         return Ok(false);
     };
-    for table in ["attachments", "mentions"] {
-        crm.execute(
-            &format!("DELETE FROM {table} WHERE interaction_id=?1"),
-            [&interaction_id],
-        )?;
-    }
     crm.execute(
-        "DELETE FROM semantic_chunks WHERE id=?1",
-        [format!("interaction:{interaction_id}")],
+        "DELETE FROM attachments WHERE interaction_id=?1",
+        [&interaction_id],
     )?;
     crm.execute(
-        "UPDATE interactions SET body=NULL, subject=NULL, deleted_at=CURRENT_TIMESTAMP,
-         analysis_state='complete' WHERE id=?1",
+        "UPDATE interactions SET body=NULL, subject=NULL, deleted_at=CURRENT_TIMESTAMP WHERE id=?1",
         [&interaction_id],
     )?;
     crm.execute(

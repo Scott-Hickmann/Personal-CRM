@@ -11,8 +11,6 @@ use crate::error::{CrmError, Result};
 pub struct Config {
     pub self_identity: SelfIdentity,
     #[serde(default)]
-    pub mlx: MlxConfig,
-    #[serde(default)]
     pub gmail: GmailConfig,
     #[serde(default)]
     pub contact_publish: ContactPublishConfig,
@@ -29,17 +27,6 @@ pub struct SelfIdentity {
     pub phones: Vec<String>,
     #[serde(default)]
     pub whatsapp_ids: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(default)]
-pub struct MlxConfig {
-    pub generation_model: String,
-    pub embedding_model: String,
-    pub batch_size: usize,
-    pub max_batch_tokens: usize,
-    pub embedding_batch_size: usize,
-    pub max_tokens: usize,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -72,19 +59,6 @@ pub struct SourcePaths {
     pub whatsapp_calls: Option<PathBuf>,
 }
 
-impl Default for MlxConfig {
-    fn default() -> Self {
-        Self {
-            generation_model: "mlx-community/gemma-4-E4B-it-qat-4bit".into(),
-            embedding_model: "mlx-community/embeddinggemma-300m-bf16".into(),
-            batch_size: 8,
-            max_batch_tokens: 8_192,
-            embedding_batch_size: 32,
-            max_tokens: 256,
-        }
-    }
-}
-
 impl Config {
     pub fn new(name: String, phones: Vec<String>) -> Result<Self> {
         let name = name.trim().to_owned();
@@ -98,7 +72,6 @@ impl Config {
                 phones: normalize_strings(phones),
                 whatsapp_ids: Vec::new(),
             },
-            mlx: MlxConfig::default(),
             gmail: GmailConfig::default(),
             contact_publish: ContactPublishConfig::default(),
             paths: SourcePaths::discover()?,
@@ -199,24 +172,6 @@ mod tests {
             Config::new(" Scott Hickmann ".into(), vec![" +1 555 123 4567 ".into()]).unwrap();
         assert_eq!(config.self_identity.name, "Scott Hickmann");
         assert_eq!(config.self_identity.phones, ["+1 555 123 4567"]);
-        assert_eq!(
-            config.mlx.generation_model,
-            "mlx-community/gemma-4-E4B-it-qat-4bit"
-        );
-        assert_eq!(config.mlx.batch_size, 8);
-        assert_eq!(config.mlx.max_batch_tokens, 8_192);
-        assert_eq!(config.mlx.embedding_batch_size, 32);
-        assert_eq!(config.mlx.max_tokens, 256);
-    }
-
-    #[test]
-    fn fills_new_mlx_limits_in_partial_config() {
-        let config: MlxConfig = toml::from_str("batch_size = 4").unwrap();
-
-        assert_eq!(config.batch_size, 4);
-        assert_eq!(config.max_batch_tokens, 8_192);
-        assert_eq!(config.embedding_batch_size, 32);
-        assert_eq!(config.max_tokens, 256);
     }
 
     #[test]

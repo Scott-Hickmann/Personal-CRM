@@ -113,7 +113,6 @@ pub(crate) fn rebind_unresolved_members(connection: &Connection) -> Result<usize
 
 pub(crate) fn reconcile_source(connection: &Connection, source_id: &str) -> Result<usize> {
     let transaction = crate::db::immediate_transaction(connection)?;
-    let previous = context_versions(&transaction, source_id)?;
     transaction.execute(
         "DELETE FROM relationship_contexts WHERE source_id=?1",
         [source_id],
@@ -149,7 +148,6 @@ pub(crate) fn reconcile_source(connection: &Connection, source_id: &str) -> Resu
          JOIN conversation_activity activity ON activity.thread_native_id=a.thread_native_id",
         [source_id],
     )?;
-    let current = context_versions(&transaction, source_id)?;
     transaction.execute(
         "INSERT INTO relationships(
              id, source_person_id, target_person_id, first_observed_at,
@@ -166,24 +164,6 @@ pub(crate) fn reconcile_source(connection: &Connection, source_id: &str) -> Resu
            shared_context_count=excluded.shared_context_count",
         [],
     )?;
-    let pairs = previous
-        .keys()
-        .chain(current.keys())
-        .cloned()
-        .collect::<std::collections::HashSet<_>>();
-    for pair in pairs {
-        if previous.get(&pair) != current.get(&pair) {
-            transaction.execute(
-                "UPDATE relationships SET relationship_type='unclear',
-                 classification_confidence=NULL, classification_state='pending',
-                 classification_evidence='', evidence_message_ids_json='[]',
-                 model_version=NULL, prompt_hash=NULL,
-                 structure_revision=structure_revision+1
-                 WHERE source_person_id=?1 AND target_person_id=?2",
-                params![pair.0, pair.1],
-            )?;
-        }
-    }
     transaction.execute(
         "DELETE FROM relationships
          WHERE NOT EXISTS (
@@ -193,45 +173,11 @@ pub(crate) fn reconcile_source(connection: &Connection, source_id: &str) -> Resu
          )",
         [],
     )?;
-    let count = transaction.query_row(
-        "SELECT COUNT(*) FROM relationships WHERE classification_state='pending'",
-        [],
-        |row| row.get::<_, i64>(0),
-    )?;
+    let count = transaction.query_row("SELECT COUNT(*) FROM relationships", [], |row| {
+        row.get::<_, i64>(0)
+    })?;
     transaction.commit()?;
     Ok(count as usize)
-}
-
-fn context_versions(
-    connection: &Connection,
-    source_id: &str,
-) -> Result<std::collections::HashMap<(String, String), Vec<String>>> {
-    let mut statement = connection.prepare(
-        "SELECT source_person_id, target_person_id, thread_native_id, channel,
-                first_observed_at, last_observed_at, message_count
-         FROM relationship_contexts WHERE source_id=?1
-         ORDER BY source_person_id, target_person_id, thread_native_id",
-    )?;
-    let rows = statement
-        .query_map([source_id], |row| {
-            Ok((
-                (row.get::<_, String>(0)?, row.get::<_, String>(1)?),
-                format!(
-                    "{}\0{}\0{}\0{}\0{}",
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, i64>(6)?,
-                ),
-            ))
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    let mut versions = std::collections::HashMap::<_, Vec<_>>::new();
-    for (pair, version) in rows {
-        versions.entry(pair).or_default().push(version);
-    }
-    Ok(versions)
 }
 
 pub(crate) fn reconcile_all(connection: &Connection) -> Result<usize> {
@@ -245,13 +191,56 @@ pub(crate) fn reconcile_all(connection: &Connection) -> Result<usize> {
         reconcile_source(connection, &source)?;
     }
     connection
-        .query_row(
-            "SELECT COUNT(*) FROM relationships WHERE classification_state='pending'",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
+        .query_row("SELECT COUNT(*) FROM relationships", [], |row| {
+            row.get::<_, i64>(0)
+        })
         .map(|count| count as usize)
         .map_err(Into::into)
+}
+
+pub(crate) fn mark_dirty(connection: &Connection, sources: &[String], all: bool) -> Result<usize> {
+    if all {
+        return connection
+            .execute(
+                "INSERT INTO dirty_conversations(source_id, thread_native_id, reason, dirty_at)
+                 SELECT DISTINCT source_id, thread_native_id, 'contact identities changed',
+                        CURRENT_TIMESTAMP
+                 FROM conversation_memberships WHERE active=1
+                 ON CONFLICT(source_id, thread_native_id) DO UPDATE SET
+                   reason=excluded.reason, dirty_at=excluded.dirty_at",
+                [],
+            )
+            .map_err(Into::into);
+    }
+    let mut marked = 0;
+    for source in sources {
+        marked += connection.execute(
+            "INSERT INTO dirty_conversations(source_id, thread_native_id, reason, dirty_at)
+             SELECT DISTINCT source_id, thread_native_id, 'source interactions changed',
+                    CURRENT_TIMESTAMP
+             FROM conversation_memberships WHERE source_id=?1 AND active=1
+             ON CONFLICT(source_id, thread_native_id) DO UPDATE SET
+               reason=excluded.reason, dirty_at=excluded.dirty_at",
+            [source],
+        )?;
+    }
+    Ok(marked)
+}
+
+pub(crate) fn clear_dirty(connection: &Connection, sources: &[String], all: bool) -> Result<usize> {
+    if all {
+        return connection
+            .execute("DELETE FROM dirty_conversations", [])
+            .map_err(Into::into);
+    }
+    let mut cleared = 0;
+    for source in sources {
+        cleared += connection.execute(
+            "DELETE FROM dirty_conversations WHERE source_id=?1",
+            [source],
+        )?;
+    }
+    Ok(cleared)
 }
 
 fn resolve_person(connection: &Connection, identity: &str) -> Result<Option<String>> {

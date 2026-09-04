@@ -68,23 +68,14 @@ fn shared_membership_creates_one_canonical_relationship() {
     .unwrap();
 
     assert_eq!(reconcile_source(&connection, "source").unwrap(), 1);
-    let row: (String, String, String, i64) = connection
+    let row: (String, String, i64) = connection
         .query_row(
-            "SELECT source_person_id, target_person_id, relationship_type,
-                    shared_context_count FROM relationships",
+            "SELECT source_person_id, target_person_id, shared_context_count FROM relationships",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap();
-    assert_eq!(row, ("a".into(), "b".into(), "unclear".into(), 1));
-
-    connection
-        .execute(
-            "UPDATE relationships SET relationship_type='friend',
-                 classification_confidence=0.9, classification_state='complete'",
-            [],
-        )
-        .unwrap();
+    assert_eq!(row, ("a".into(), "b".into(), 1));
     connection
         .execute(
             "UPDATE interactions SET occurred_at='2026-01-02' WHERE id='message'",
@@ -92,15 +83,12 @@ fn shared_membership_creates_one_canonical_relationship() {
         )
         .unwrap();
     reconcile_source(&connection, "source").unwrap();
-    let reset: (String, Option<f64>, String) = connection
-        .query_row(
-            "SELECT relationship_type, classification_confidence, classification_state
-                 FROM relationships",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
+    let observed: String = connection
+        .query_row("SELECT last_observed_at FROM relationships", [], |row| {
+            row.get(0)
+        })
         .unwrap();
-    assert_eq!(reset, ("unclear".into(), None, "pending".into()));
+    assert_eq!(observed, "2026-01-02");
 }
 
 #[test]

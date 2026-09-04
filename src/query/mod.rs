@@ -12,7 +12,6 @@ pub enum Entity {
     People,
     Interactions,
     Relationships,
-    Mentions,
     Followups,
     Sources,
 }
@@ -110,7 +109,6 @@ fn specification(entity: Entity) -> &'static Specification {
         Entity::People => &PEOPLE,
         Entity::Interactions => &INTERACTIONS,
         Entity::Relationships => &RELATIONSHIPS,
-        Entity::Mentions => &MENTIONS,
         Entity::Followups => &FOLLOWUPS,
         Entity::Sources => &SOURCES,
     }
@@ -222,7 +220,6 @@ const INTERACTIONS: Specification = Specification {
         ("subject", "i.subject"),
         ("body", "i.body"),
         ("deleted_at", "i.deleted_at"),
-        ("analysis_state", "i.analysis_state"),
     ],
 };
 const RELATIONSHIPS: Specification = Specification {
@@ -232,40 +229,15 @@ const RELATIONSHIPS: Specification = Specification {
         "id",
         "source_person_id",
         "target_person_id",
-        "relationship_type",
-        "classification_confidence",
-        "classification_state",
         "shared_context_count",
     ],
     fields: &[
         ("id", "r.id"),
         ("source_person_id", "r.source_person_id"),
         ("target_person_id", "r.target_person_id"),
-        ("relationship_type", "r.relationship_type"),
-        ("classification_confidence", "r.classification_confidence"),
-        ("classification_state", "r.classification_state"),
         ("shared_context_count", "r.shared_context_count"),
+        ("first_observed_at", "r.first_observed_at"),
         ("last_observed_at", "r.last_observed_at"),
-    ],
-};
-const MENTIONS: Specification = Specification {
-    name: "mentions",
-    from: "mentions m",
-    defaults: &[
-        "id",
-        "interaction_id",
-        "text",
-        "person_id",
-        "confidence",
-        "status",
-    ],
-    fields: &[
-        ("id", "m.id"),
-        ("interaction_id", "m.interaction_id"),
-        ("text", "m.text"),
-        ("person_id", "m.person_id"),
-        ("confidence", "m.confidence"),
-        ("status", "m.status"),
     ],
 };
 const FOLLOWUPS: Specification = Specification {

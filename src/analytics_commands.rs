@@ -13,13 +13,12 @@ pub fn explain(format: Format, config_path: PathBuf, args: PersonReference) -> R
     let person_id = repository::resolve_person_id(&connection, &args.person)?;
     let explanation = scoring::explain(&connection, &person_id)?;
     let table = format!(
-        "{}\naffinity    {:.1} ({})\nactivity    {}\nbehavior    {:.1}\nrelational  {:.1}\nrating      {}\n90d count   {}\nlast seen   {}",
+        "{}\naffinity    {:.1} ({})\nactivity    {}\nbehavior    {:.1}\nrating      {}\n90d count   {}\nlast seen   {}",
         explanation.display_name,
         explanation.affinity_score,
         explanation.affinity_tier,
         explanation.activity_state,
         explanation.behavioral_score,
-        explanation.relational_score,
         explanation
             .closeness_rating
             .map(|rating| format!("{rating}/7"))
@@ -41,7 +40,7 @@ pub fn graph(format: Format, config_path: PathBuf, args: GraphArgs) -> Result<()
         .as_deref()
         .map(|person| repository::resolve_person_id(&connection, person))
         .transpose()?;
-    let graph = graph::build(&connection, person_id.as_deref(), args.min_confidence)?;
+    let graph = graph::build(&connection, person_id.as_deref())?;
     let table = graph.mermaid.clone();
     output::emit(format, "graph", &graph, table)
 }

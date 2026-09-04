@@ -39,6 +39,10 @@ const MIGRATIONS: &[(i64, &str)] = &[
         16,
         include_str!("../migrations/016_conversation_titles.sql"),
     ),
+    (
+        18,
+        include_str!("../migrations/018_deterministic_orchestration.sql"),
+    ),
 ];
 
 const RELATIONSHIP_STRUCTURE_REVISION_MIGRATION: i64 = 17;
@@ -59,6 +63,7 @@ pub fn open(path: &Path) -> Result<Connection> {
     let connection = Connection::open(path)?;
     connection.busy_timeout(Duration::from_secs(5))?;
     connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
+    backup_before_destructive_migration(&connection, path)?;
     migrate(&connection)?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|source| {
         CrmError::Io {
@@ -67,6 +72,31 @@ pub fn open(path: &Path) -> Result<Connection> {
         }
     })?;
     Ok(connection)
+}
+
+fn backup_before_destructive_migration(connection: &Connection, path: &Path) -> Result<()> {
+    let current = connection
+        .query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_versions",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0);
+    if current == 0 || current >= 18 || !path.exists() {
+        return Ok(());
+    }
+    let backup = path.with_extension("pre-deterministic-v18.sqlite3");
+    if backup.exists() {
+        return Ok(());
+    }
+    connection.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])?;
+    fs::set_permissions(&backup, fs::Permissions::from_mode(0o600)).map_err(|source| {
+        CrmError::Io {
+            path: backup,
+            source,
+        }
+    })?;
+    Ok(())
 }
 
 fn migrate(connection: &Connection) -> Result<()> {
@@ -137,7 +167,39 @@ mod tests {
         let path = directory.path().join("crm.sqlite3");
         drop(open(&path).unwrap());
         let connection = open(&path).unwrap();
-        assert_eq!(schema_version(&connection).unwrap(), 17);
+        assert_eq!(schema_version(&connection).unwrap(), 18);
+    }
+
+    #[test]
+    fn destructive_migration_creates_a_consistent_backup() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("crm.sqlite3");
+        let connection = Connection::open(&path).unwrap();
+        for (_, sql) in MIGRATIONS.iter().filter(|(version, _)| *version <= 16) {
+            connection.execute_batch(sql).unwrap();
+        }
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO schema_versions(version) VALUES (17)",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        let migrated = open(&path).unwrap();
+        let backup_path = path.with_extension("pre-deterministic-v18.sqlite3");
+        let backup = Connection::open(backup_path).unwrap();
+
+        assert_eq!(schema_version(&migrated).unwrap(), 18);
+        assert_eq!(schema_version(&backup).unwrap(), 17);
+        let legacy_jobs: bool = backup
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='jobs')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(legacy_jobs);
     }
 
     #[test]
@@ -179,7 +241,7 @@ mod tests {
     }
 
     #[test]
-    fn hybrid_affinity_migration_invalidates_legacy_scores_and_requeues_analysis() {
+    fn deterministic_migration_removes_model_state_and_queues_scoring() {
         let connection = Connection::open_in_memory().unwrap();
         for (version, sql) in MIGRATIONS.iter().filter(|(version, _)| *version <= 11) {
             connection.execute_batch(sql).unwrap();
@@ -206,22 +268,31 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        let state: String = connection
-            .query_row(
-                "SELECT analysis_state FROM interactions WHERE id='interaction'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(schema_version(&connection).unwrap(), 17);
+        assert_eq!(schema_version(&connection).unwrap(), 18);
         assert_eq!(score, None);
-        assert_eq!(state, "pending");
         assert_eq!(
             connection
                 .query_row("SELECT COUNT(*) FROM metrics", [], |row| row
                     .get::<_, i64>(0))
                 .unwrap(),
             0
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM dirty_people", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT state FROM maintenance_state WHERE kind='scoring'",
+                    [],
+                    |row| row.get::<_, String>(0)
+                )
+                .unwrap(),
+            "pending"
         );
     }
 
@@ -251,15 +322,14 @@ mod tests {
 
         migrate(&connection).unwrap();
 
-        let relationship: (String, String, String) = connection
+        let relationship: (String, String) = connection
             .query_row(
-                "SELECT source_person_id, target_person_id, classification_state
-                 FROM relationships",
+                "SELECT source_person_id, target_person_id FROM relationships",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(relationship, ("a".into(), "b".into(), "pending".into()));
+        assert_eq!(relationship, ("a".into(), "b".into()));
     }
 
     #[test]
@@ -276,7 +346,13 @@ mod tests {
             .replace("    structure_revision INTEGER NOT NULL DEFAULT 1,\n", "");
         connection.execute_batch(&migration).unwrap();
         connection
-            .execute_batch(MIGRATIONS.last().unwrap().1)
+            .execute_batch(
+                MIGRATIONS
+                    .iter()
+                    .find(|(version, _)| *version == 16)
+                    .unwrap()
+                    .1,
+            )
             .unwrap();
 
         migrate(&connection).unwrap();
@@ -289,11 +365,11 @@ mod tests {
             .collect::<std::result::Result<_, _>>()
             .unwrap();
         assert!(columns.iter().any(|column| column == "structure_revision"));
-        assert_eq!(schema_version(&connection).unwrap(), 17);
+        assert_eq!(schema_version(&connection).unwrap(), 18);
     }
 
     #[test]
-    fn concurrent_jobs_migration_splits_legacy_communications_work() {
+    fn deterministic_migration_removes_the_legacy_job_queue() {
         let connection = Connection::open_in_memory().unwrap();
         for (_, sql) in MIGRATIONS.iter().filter(|(version, _)| *version <= 12) {
             connection.execute_batch(sql).unwrap();
@@ -307,16 +383,14 @@ mod tests {
 
         migrate(&connection).unwrap();
 
-        let kinds: Vec<String> = connection
-            .prepare("SELECT kind FROM jobs ORDER BY kind")
-            .unwrap()
-            .query_map([], |row| row.get(0))
-            .unwrap()
-            .collect::<std::result::Result<_, _>>()
+        let jobs_exist: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='jobs')",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
-        assert_eq!(
-            kinds,
-            ["apple_calls", "imessage", "whatsapp", "whatsapp_calls"]
-        );
+        assert!(!jobs_exist);
+        assert_eq!(schema_version(&connection).unwrap(), 18);
     }
 }

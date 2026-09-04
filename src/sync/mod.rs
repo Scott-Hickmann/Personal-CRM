@@ -52,6 +52,17 @@ pub(crate) fn run_with_progress(
     crm: &Connection,
     progress: &mut ProgressTracker,
 ) -> Result<Vec<SyncReport>> {
+    let reports = import_with_progress(target, config, crm, progress)?;
+    reconcile(target, crm, &reports)?;
+    Ok(reports)
+}
+
+pub(crate) fn import_with_progress(
+    target: SyncTarget,
+    config: &crate::config::Config,
+    crm: &Connection,
+    progress: &mut ProgressTracker,
+) -> Result<Vec<SyncReport>> {
     let mut reports = Vec::new();
     if matches!(target, SyncTarget::Contacts) {
         reports.push(contacts::sync(config, crm, progress)?);
@@ -71,18 +82,26 @@ pub(crate) fn run_with_progress(
     if matches!(target, SyncTarget::Gmail) && !config.gmail.accounts.is_empty() {
         reports.extend(gmail::sync(config, crm, progress)?);
     }
+    Ok(reports)
+}
+
+pub(crate) fn reconcile(
+    target: SyncTarget,
+    crm: &Connection,
+    reports: &[SyncReport],
+) -> Result<()> {
     if matches!(target, SyncTarget::Contacts) {
         crate::relationships::rebind_unresolved_members(crm)?;
         crate::relationships::reconcile_all(crm)?;
     } else {
-        for source in &reports {
+        for source in reports {
             if matches!(target, SyncTarget::Gmail) {
                 crate::relationships::rebuild_members_from_interactions(crm, &source.source)?;
             }
             crate::relationships::reconcile_source(crm, &source.source)?;
         }
     }
-    Ok(reports)
+    Ok(())
 }
 
 pub(crate) fn gmail_backfill_pending(crm: &Connection) -> Result<bool> {
@@ -120,12 +139,7 @@ fn upsert_interaction(
            kind=excluded.kind, occurred_at=excluded.occurred_at,
            direction=excluded.direction, subject=excluded.subject, body=excluded.body,
            metadata_json=excluded.metadata_json, deleted_at=NULL,
-           last_seen_at=excluded.last_seen_at,
-           analysis_state=CASE
-             WHEN COALESCE(interactions.subject, '') != COALESCE(excluded.subject, '')
-               OR COALESCE(interactions.body, '') != COALESCE(excluded.body, '')
-               OR interactions.deleted_at IS NOT NULL
-             THEN 'pending' ELSE interactions.analysis_state END",
+           last_seen_at=excluded.last_seen_at",
         params![id, source_id, native_id, thread_id, channel, kind, occurred_at, direction, subject, body, metadata.to_string(), run_at],
     )?;
     Ok(id)

@@ -1,14 +1,13 @@
 use std::collections::HashMap;
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::thread;
 use std::time::{Duration as StdDuration, Instant, SystemTime};
 
 use crate::config::Config;
 use crate::contact_publish::apple;
+use crate::coordinator::{self, WorkKind};
 use crate::error::{CrmError, Result};
-use crate::jobs::{self, JobKind};
 use crate::{commands, review};
 use chrono::Duration;
 
@@ -20,7 +19,7 @@ pub fn run(config_path: PathBuf) -> Result<()> {
             "migration review is required before the daemon can start; run `crm review`".into(),
         ));
     }
-    let _lock = DaemonLock::acquire(config_path.parent().unwrap())?;
+    let _lock = coordinator::WriterLock::acquire(config_path.parent().unwrap())?;
     connection.execute(
         "INSERT INTO daemon_state(id, pid, started_at, heartbeat_at, stopped_at, last_error)
          VALUES (1, ?1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL, NULL)
@@ -28,14 +27,13 @@ pub fn run(config_path: PathBuf) -> Result<()> {
          heartbeat_at=CURRENT_TIMESTAMP, stopped_at=NULL, last_error=NULL",
         [std::process::id()],
     )?;
-    let recovered = jobs::recover_running(&connection)?;
+    let recovered = coordinator::recover_interrupted(&connection)?;
     crate::progress::record_interrupted(&config_path, recovered);
     enqueue_initial(&connection)?;
     let mut watcher = SourceWatcher::new(&config)?;
     let mut gmail_due = Instant::now();
     let mut photos_due = Instant::now();
     let mut audit_due = Instant::now();
-    let mut workers = HashMap::new();
     loop {
         connection.execute(
             "UPDATE daemon_state SET heartbeat_at=CURRENT_TIMESTAMP WHERE id=1",
@@ -43,9 +41,9 @@ pub fn run(config_path: PathBuf) -> Result<()> {
         )?;
         let changed = watcher.changed()?;
         if changed.contacts {
-            jobs::enqueue(
+            coordinator::request(
                 &connection,
-                JobKind::Contacts,
+                WorkKind::Contacts,
                 "iCloud Contacts changed",
                 Duration::seconds(2),
             )?;
@@ -53,43 +51,43 @@ pub fn run(config_path: PathBuf) -> Result<()> {
         for (changed, kind, reason) in [
             (
                 changed.imessage,
-                JobKind::Imessage,
+                WorkKind::Imessage,
                 "iMessage store changed",
             ),
             (
                 changed.whatsapp,
-                JobKind::Whatsapp,
+                WorkKind::Whatsapp,
                 "WhatsApp store changed",
             ),
             (
                 changed.apple_calls,
-                JobKind::AppleCalls,
+                WorkKind::AppleCalls,
                 "Apple call store changed",
             ),
             (
                 changed.whatsapp_calls,
-                JobKind::WhatsappCalls,
+                WorkKind::WhatsappCalls,
                 "WhatsApp call store changed",
             ),
-            (changed.photos, JobKind::Photos, "Photos store changed"),
+            (changed.photos, WorkKind::Photos, "Photos store changed"),
         ] {
             if changed {
-                jobs::enqueue(&connection, kind, reason, Duration::seconds(2))?;
+                coordinator::request(&connection, kind, reason, Duration::seconds(2))?;
             }
         }
         if gmail_due.elapsed() >= StdDuration::from_secs(60) {
-            jobs::enqueue(
+            coordinator::request(
                 &connection,
-                JobKind::Gmail,
+                WorkKind::Gmail,
                 "Gmail history poll",
                 Duration::zero(),
             )?;
             gmail_due = Instant::now();
         }
         if photos_due.elapsed() >= StdDuration::from_secs(300) {
-            jobs::enqueue(
+            coordinator::request(
                 &connection,
-                JobKind::Photos,
+                WorkKind::Photos,
                 "Photos reconciliation",
                 Duration::zero(),
             )?;
@@ -97,27 +95,18 @@ pub fn run(config_path: PathBuf) -> Result<()> {
         }
         if audit_due.elapsed() >= StdDuration::from_secs(86_400) {
             for kind in [
-                JobKind::Imessage,
-                JobKind::Whatsapp,
-                JobKind::AppleCalls,
-                JobKind::WhatsappCalls,
+                WorkKind::Imessage,
+                WorkKind::Whatsapp,
+                WorkKind::AppleCalls,
+                WorkKind::WhatsappCalls,
             ] {
-                jobs::enqueue(&connection, kind, "daily deletion audit", Duration::zero())?;
+                coordinator::request(&connection, kind, "daily deletion audit", Duration::zero())?;
             }
             audit_due = Instant::now();
         }
-        reap_workers(&connection, &mut workers)?;
-        for (id, kind) in jobs::ready(&connection)? {
-            if workers.contains_key(&kind) {
-                continue;
-            }
-            let worker_config = config_path.clone();
-            workers.insert(
-                kind,
-                thread::spawn(move || (id, jobs::process(&worker_config, id))),
-            );
+        if !coordinator::process_one(&config_path, &connection)? {
+            std::thread::sleep(StdDuration::from_millis(500));
         }
-        thread::sleep(StdDuration::from_millis(500));
     }
 }
 
@@ -132,15 +121,15 @@ pub(crate) fn process_is_running(pid: i64) -> bool {
 
 fn enqueue_initial(connection: &rusqlite::Connection) -> Result<()> {
     for (kind, reason) in [
-        (JobKind::Contacts, "daemon startup"),
-        (JobKind::Imessage, "daemon startup"),
-        (JobKind::Whatsapp, "daemon startup"),
-        (JobKind::AppleCalls, "daemon startup"),
-        (JobKind::WhatsappCalls, "daemon startup"),
-        (JobKind::Gmail, "daemon startup"),
-        (JobKind::Photos, "daemon startup"),
+        (WorkKind::Contacts, "daemon startup"),
+        (WorkKind::Imessage, "daemon startup"),
+        (WorkKind::Whatsapp, "daemon startup"),
+        (WorkKind::AppleCalls, "daemon startup"),
+        (WorkKind::WhatsappCalls, "daemon startup"),
+        (WorkKind::Gmail, "daemon startup"),
+        (WorkKind::Photos, "daemon startup"),
     ] {
-        jobs::enqueue(connection, kind, reason, Duration::zero())?;
+        coordinator::request(connection, kind, reason, Duration::zero())?;
     }
     Ok(())
 }
@@ -220,34 +209,6 @@ impl SourceWatcher {
     }
 }
 
-type Worker = thread::JoinHandle<(i64, Result<bool>)>;
-
-fn reap_workers(
-    connection: &rusqlite::Connection,
-    workers: &mut HashMap<JobKind, Worker>,
-) -> Result<()> {
-    let finished: Vec<_> = workers
-        .iter()
-        .filter(|(_, worker)| worker.is_finished())
-        .map(|(kind, _)| *kind)
-        .collect();
-    for kind in finished {
-        let worker = workers.remove(&kind).unwrap();
-        match worker.join() {
-            Ok((_, Ok(_))) => {}
-            Ok((id, Err(error))) => {
-                jobs::recover_job(connection, id, &error.to_string())?;
-                eprintln!("{} worker failed: {error}", kind.as_str());
-            }
-            Err(_) => {
-                jobs::recover_kind(connection, kind, "worker panicked")?;
-                eprintln!("{} worker panicked", kind.as_str());
-            }
-        }
-    }
-    Ok(())
-}
-
 fn watched_paths(path: &Path) -> Vec<PathBuf> {
     vec![
         path.to_owned(),
@@ -284,46 +245,5 @@ fn modified(path: &Path) -> Result<Option<SystemTime>> {
             path: path.to_owned(),
             source,
         }),
-    }
-}
-
-struct DaemonLock(PathBuf);
-
-impl DaemonLock {
-    fn acquire(directory: &Path) -> Result<Self> {
-        let path = directory.join("daemon.lock");
-        if let Ok(pid) = fs::read_to_string(&path) {
-            let alive = pid.trim().parse().is_ok_and(process_is_running);
-            if alive {
-                return Err(CrmError::InvalidConfig(format!(
-                    "CRM daemon is already running as PID {}",
-                    pid.trim()
-                )));
-            }
-            fs::remove_file(&path).map_err(|source| CrmError::Io {
-                path: path.clone(),
-                source,
-            })?;
-        }
-        use std::io::Write;
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .map_err(|source| CrmError::Io {
-                path: path.clone(),
-                source,
-            })?;
-        writeln!(file, "{}", std::process::id()).map_err(|source| CrmError::Io {
-            path: path.clone(),
-            source,
-        })?;
-        Ok(Self(path))
-    }
-}
-
-impl Drop for DaemonLock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
     }
 }

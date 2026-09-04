@@ -216,9 +216,7 @@ fn merge_migration_shell(
              UNION ALL SELECT 1 FROM cadences WHERE person_id=?1
              UNION ALL SELECT 1 FROM relationships
                  WHERE source_person_id=?1 OR target_person_id=?1
-             UNION ALL SELECT 1 FROM mentions WHERE person_id=?1
              UNION ALL SELECT 1 FROM metrics WHERE person_id=?1
-             UNION ALL SELECT 1 FROM semantic_chunks WHERE person_id=?1
              UNION ALL SELECT 1 FROM photo_links WHERE person_id=?1
          )",
         [source_person_id],

@@ -70,10 +70,6 @@ fn delete_person(connection: &Connection, person_id: &str) -> Result<()> {
         [person_id],
     )?;
     transaction.execute(
-        "UPDATE mentions SET person_id=NULL, status='unresolved' WHERE person_id=?1",
-        [person_id],
-    )?;
-    transaction.execute(
         "DELETE FROM relationships WHERE source_person_id=?1 OR target_person_id=?1",
         [person_id],
     )?;
@@ -110,15 +106,12 @@ mod tests {
                  INSERT INTO interaction_participants(interaction_id, person_id, identity_value, role)
                  VALUES ('interaction', 'legacy', 'legacy@example.com', 'sender');
                  INSERT INTO relationships(
-                     id, source_person_id, target_person_id, relationship_type,
-                     classification_confidence, classification_state,
+                     id, source_person_id, target_person_id,
                      first_observed_at, last_observed_at, shared_context_count
                  ) VALUES (
-                     'relationship', 'legacy', 'other', 'professional', 0.8, 'complete',
+                     'relationship', 'legacy', 'other',
                      '2026-01-01', '2026-01-01', 1
-                 );
-                 INSERT INTO mentions(id, interaction_id, text, person_id, confidence, status)
-                 VALUES ('mention', 'interaction', 'Legacy', 'legacy', 0.8, 'resolved');",
+                 );",
             )
             .unwrap();
         let review_id = review::enqueue(
@@ -147,12 +140,6 @@ mod tests {
             )
             .unwrap();
         assert_eq!(participant, (None, "legacy@example.com".into()));
-        let mention: (Option<String>, String) = connection
-            .query_row("SELECT person_id, status FROM mentions", [], |row| {
-                Ok((row.get(0)?, row.get(1)?))
-            })
-            .unwrap();
-        assert_eq!(mention, (None, "unresolved".into()));
         assert!(review::pending(&connection).unwrap().is_empty());
     }
 

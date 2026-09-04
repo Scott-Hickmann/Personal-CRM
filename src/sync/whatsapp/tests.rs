@@ -54,11 +54,6 @@ fn incremental_sync_reads_only_the_cursor_overlap_and_new_rows() {
         1_005
     );
     let source = Connection::open(path).unwrap();
-    crm.execute(
-        "UPDATE interactions SET analysis_state='complete' WHERE native_id='message-1005'",
-        [],
-    )
-    .unwrap();
     source
         .execute("UPDATE ZWAMESSAGE SET ZTEXT='edited' WHERE Z_PK=1005", [])
         .unwrap();
@@ -80,14 +75,14 @@ fn incremental_sync_reads_only_the_cursor_overlap_and_new_rows() {
         )
         .unwrap();
     assert_eq!(cursor, "1006");
-    let state: String = crm
+    let body: String = crm
         .query_row(
-            "SELECT analysis_state FROM interactions WHERE native_id='message-1005'",
+            "SELECT body FROM interactions WHERE native_id='message-1005'",
             [],
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(state, "pending");
+    assert_eq!(body, "edited");
 }
 
 #[test]

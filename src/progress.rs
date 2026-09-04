@@ -24,8 +24,7 @@ pub(crate) struct ProgressEvent {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub(crate) struct ProgressSnapshot {
-    pub job_id: Option<i64>,
-    pub job_kind: Option<String>,
+    pub work_kind: Option<String>,
     pub state: String,
     pub message: String,
     #[serde(default)]
@@ -62,20 +61,19 @@ impl ProgressTracker {
         }
     }
 
-    pub(crate) fn start(config_path: &Path, job_id: i64, job_kind: &str) -> Self {
-        let path = progress_path(config_path, job_kind);
+    pub(crate) fn start(config_path: &Path, work_kind: &str) -> Self {
+        let path = progress_path(config_path, work_kind);
         let mut snapshot = read_path(&path).unwrap_or_default();
-        snapshot.job_id = Some(job_id);
-        snapshot.job_kind = Some(job_kind.to_owned());
+        snapshot.work_kind = Some(work_kind.to_owned());
         snapshot.state = "running".into();
-        snapshot.message = format!("Starting {job_kind}");
+        snapshot.message = format!("Starting {work_kind}");
         snapshot.stage_current = 1;
         snapshot.stage_total = 1;
         snapshot.current = 0;
         snapshot.total = 1;
         snapshot.total_is_estimate = false;
         snapshot.unit = None;
-        append_event(&mut snapshot, format!("Started {job_kind}"));
+        append_event(&mut snapshot, format!("Started {work_kind}"));
         let mut tracker = Self {
             path: Some(path),
             snapshot,
@@ -173,8 +171,7 @@ impl ProgressTracker {
 
     pub(crate) fn idle(&mut self, message: impl Into<String>) {
         append_event(&mut self.snapshot, message.into());
-        self.snapshot.job_id = None;
-        self.snapshot.job_kind = None;
+        self.snapshot.work_kind = None;
         self.snapshot.state = "idle".into();
         self.snapshot.message = "Waiting for work".into();
         self.snapshot.stage_current = 0;
@@ -206,8 +203,8 @@ impl ProgressTracker {
     }
 }
 
-pub(crate) fn read(config_path: &Path, job_kind: &str) -> Option<ProgressSnapshot> {
-    read_path(&progress_path(config_path, job_kind))
+pub(crate) fn read(config_path: &Path, work_kind: &str) -> Option<ProgressSnapshot> {
+    read_path(&progress_path(config_path, work_kind))
 }
 
 pub(crate) fn record_interrupted(config_path: &Path, count: usize) {
@@ -250,8 +247,8 @@ fn progress_directory(config_path: &Path) -> PathBuf {
         .join("live-status")
 }
 
-fn progress_path(config_path: &Path, job_kind: &str) -> PathBuf {
-    progress_directory(config_path).join(format!("{job_kind}.json"))
+fn progress_path(config_path: &Path, work_kind: &str) -> PathBuf {
+    progress_directory(config_path).join(format!("{work_kind}.json"))
 }
 
 fn read_path(path: &Path) -> Option<ProgressSnapshot> {
@@ -309,7 +306,7 @@ mod tests {
     fn persists_progress_and_bounds_the_activity_log() {
         let directory = tempfile::tempdir().unwrap();
         let config_path = directory.path().join("config.toml");
-        let mut tracker = ProgressTracker::start(&config_path, 42, "gmail");
+        let mut tracker = ProgressTracker::start(&config_path, "gmail");
         tracker.stage("Reading inbox", 1, 2, 100, false, "emails");
         tracker.progress(
             "Reading emails from inbox@example.com",
@@ -324,7 +321,7 @@ mod tests {
         }
 
         let snapshot = read(&config_path, "gmail").unwrap();
-        assert_eq!(snapshot.job_id, Some(42));
+        assert_eq!(snapshot.work_kind.as_deref(), Some("gmail"));
         assert_eq!(snapshot.stage_current, 1);
         assert_eq!(snapshot.stage_total, 2);
         assert_eq!(snapshot.current, 10);
@@ -343,12 +340,12 @@ mod tests {
     }
 
     #[test]
-    fn preserves_interrupted_job_progress_for_the_next_run() {
+    fn preserves_interrupted_work_progress_for_the_next_run() {
         let directory = tempfile::tempdir().unwrap();
         let config_path = directory.path().join("config.toml");
-        let mut tracker = ProgressTracker::start(&config_path, 7, "analysis");
+        let mut tracker = ProgressTracker::start(&config_path, "scoring");
         tracker.progress_now(
-            "Analyzing interactions 97-104 of 915",
+            "Scoring people 97-104 of 915",
             96,
             915,
             false,
@@ -357,28 +354,28 @@ mod tests {
 
         record_interrupted(&config_path, 1);
 
-        let snapshot = read(&config_path, "analysis").unwrap();
+        let snapshot = read(&config_path, "scoring").unwrap();
         assert_eq!(snapshot.state, "interrupted");
         assert_eq!(snapshot.current, 96);
         assert!(snapshot.focus.is_empty());
         assert_eq!(snapshot.total, 915);
         assert_eq!(
             snapshot.message,
-            "Interrupted at 96 of 915 interactions: Analyzing interactions 97-104 of 915"
+            "Interrupted at 96 of 915 interactions: Scoring people 97-104 of 915"
         );
 
-        let tracker = ProgressTracker::start(&config_path, 7, "analysis");
+        let tracker = ProgressTracker::start(&config_path, "scoring");
         assert_eq!(
             tracker.snapshot.events[tracker.snapshot.events.len() - 2].message,
-            "Interrupted at 96 of 915 interactions: Analyzing interactions 97-104 of 915"
+            "Interrupted at 96 of 915 interactions: Scoring people 97-104 of 915"
         );
     }
 
     #[test]
-    fn leaves_idle_progress_unchanged_when_another_job_was_interrupted() {
+    fn leaves_idle_progress_unchanged_when_other_work_was_interrupted() {
         let directory = tempfile::tempdir().unwrap();
         let config_path = directory.path().join("config.toml");
-        let mut tracker = ProgressTracker::start(&config_path, 8, "gmail");
+        let mut tracker = ProgressTracker::start(&config_path, "gmail");
         tracker.idle("Completed gmail");
 
         record_interrupted(&config_path, 1);
@@ -387,11 +384,11 @@ mod tests {
     }
 
     #[test]
-    fn keeps_concurrent_job_progress_separate() {
+    fn keeps_work_progress_files_separate() {
         let directory = tempfile::tempdir().unwrap();
         let config_path = directory.path().join("config.toml");
-        let mut gmail = ProgressTracker::start(&config_path, 1, "gmail");
-        let mut photos = ProgressTracker::start(&config_path, 2, "photos");
+        let mut gmail = ProgressTracker::start(&config_path, "gmail");
+        let mut photos = ProgressTracker::start(&config_path, "photos");
         gmail.progress_now("Reading Gmail", 1, 10, false, "emails");
         photos.progress_now("Reading Photos", 2, 5, false, "people");
 
