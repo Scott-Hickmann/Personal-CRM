@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTheme } from "next-themes";
 import { useRouter } from "next/navigation";
 import { SigmaContainer, useRegisterEvents, useSetSettings, useSigma } from "@react-sigma/core";
@@ -49,6 +49,7 @@ export function NetworkGraph({ overview, focusedPerson }: { overview: Overview; 
   const [tier, setTier] = useState("all");
   const [activity, setActivity] = useState("all");
   const [layout, setLayout] = useState("organic");
+  const [graphReady, setGraphReady] = useState(false);
   const [fitRequest, setFitRequest] = useState(0);
   const { resolvedTheme } = useTheme();
 
@@ -88,7 +89,7 @@ export function NetworkGraph({ overview, focusedPerson }: { overview: Overview; 
     allowInvalidContainer: true,
     defaultEdgeType: "arrow",
     hideEdgesOnMove: true,
-    hideLabelsOnMove: true,
+    hideLabelsOnMove: false,
     labelDensity: 0.45,
     labelFont: "Geist, sans-serif",
     labelGridCellSize: 150,
@@ -112,29 +113,32 @@ export function NetworkGraph({ overview, focusedPerson }: { overview: Overview; 
       <Button variant="outline" onClick={() => setFitRequest((request) => request + 1)}><Focus />Fit</Button>
     </CardContent></Card>
 
-    <div className="flex flex-wrap items-center justify-between gap-3 text-xs"><p className="text-muted-foreground">Showing {visibility.nodeIds.size} people and {visibility.edgeIds.size} relationships</p><div className="flex flex-wrap items-center gap-3">{Object.entries(tierColors).filter(([name]) => name !== "unknown").map(([name, color]) => <span key={name} className="flex items-center gap-1.5"><span className="size-2.5 rounded-full" style={{ backgroundColor: color }} />{titleCase(name)}</span>)}<Select value={layout} onValueChange={setLayout}><SelectTrigger size="sm" className="w-28"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="organic">Organic</SelectItem><SelectItem value="circle">Circle</SelectItem><SelectItem value="grid">Grid</SelectItem></SelectContent></Select></div></div>
+    <div className="flex flex-wrap items-center justify-between gap-3 text-xs"><p className="text-muted-foreground">Showing {visibility.nodeIds.size} people and {visibility.edgeIds.size} relationships</p><div className="flex flex-wrap items-center gap-3">{Object.entries(tierColors).filter(([name]) => name !== "unknown").map(([name, color]) => <span key={name} className="flex items-center gap-1.5"><span className="size-2.5 rounded-full" style={{ backgroundColor: color }} />{titleCase(name)}</span>)}<Select value={layout} onValueChange={(value) => { setGraphReady(false); setLayout(value); }}><SelectTrigger size="sm" className="w-28"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="organic">Organic</SelectItem><SelectItem value="circle">Circle</SelectItem><SelectItem value="grid">Grid</SelectItem></SelectContent></Select></div></div>
     <Card className="relative"><CardContent className="h-[calc(100vh-20rem)] min-h-[34rem] p-0">
-      <SigmaContainer<NodeAttributes, EdgeAttributes> graph={graph} settings={settings} className="size-full">
-        <GraphController dark={resolvedTheme === "dark"} edgeIds={visibility.edgeIds} fitRequest={fitRequest} focusedNode={focusedNode} layout={layout} nodeIds={visibility.nodeIds} />
+      <SigmaContainer<NodeAttributes, EdgeAttributes> graph={graph} settings={settings} className={`size-full transition-opacity duration-200 ${graphReady ? "opacity-100" : "opacity-0"}`}>
+        <GraphController dark={resolvedTheme === "dark"} edgeIds={visibility.edgeIds} fitRequest={fitRequest} focusedNode={focusedNode} layout={layout} nodeIds={visibility.nodeIds} onLayoutReady={setGraphReady} />
       </SigmaContainer>
+      {!graphReady && <div className="bg-card absolute inset-0 grid place-items-center"><p className="text-muted-foreground animate-pulse text-sm">Arranging network…</p></div>}
       {visibility.edgeIds.size === 0 && <div className="bg-background/80 absolute inset-0 grid place-items-center"><div className="text-center"><p className="font-medium">No relationships match</p><p className="text-muted-foreground mt-1 text-sm">Lower the confidence or remove a filter.</p></div></div>}
     </CardContent></Card>
   </div>;
 }
 
-function GraphController({ dark, edgeIds, fitRequest, focusedNode, layout, nodeIds }: {
+function GraphController({ dark, edgeIds, fitRequest, focusedNode, layout, nodeIds, onLayoutReady }: {
   dark: boolean;
   edgeIds: Set<string>;
   fitRequest: number;
   focusedNode: string | null;
   layout: string;
   nodeIds: Set<string>;
+  onLayoutReady: (ready: boolean) => void;
 }) {
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
   const router = useRouter();
   const sigma = useSigma<NodeAttributes, EdgeAttributes>();
   const setSettings = useSetSettings<NodeAttributes, EdgeAttributes>();
   const registerEvents = useRegisterEvents<NodeAttributes, EdgeAttributes>();
+  const visibleNodes = useRef(nodeIds);
   const { isRunning, start: startForceLayout, stop: stopForceLayout } = useWorkerLayoutForceAtlas2({
     getEdgeWeight: "confidence",
     settings: {
@@ -149,6 +153,10 @@ function GraphController({ dark, edgeIds, fitRequest, focusedNode, layout, nodeI
       strongGravityMode: true,
     },
   });
+
+  useEffect(() => {
+    visibleNodes.current = nodeIds;
+  }, [nodeIds]);
 
   useEffect(() => {
     registerEvents({
@@ -215,12 +223,16 @@ function GraphController({ dark, edgeIds, fitRequest, focusedNode, layout, nodeI
       startForceLayout();
       const timer = window.setTimeout(() => {
         stopForceLayout();
-      }, 6000);
+        fitVisibleNodes(sigma, visibleNodes.current);
+        onLayoutReady(true);
+      }, 1000);
       return () => window.clearTimeout(timer);
     }
     assignStaticLayout(sigma.getGraph(), layout);
     sigma.refresh();
-  }, [layout, sigma, startForceLayout, stopForceLayout]);
+    fitVisibleNodes(sigma, visibleNodes.current);
+    onLayoutReady(true);
+  }, [layout, onLayoutReady, sigma, startForceLayout, stopForceLayout]);
 
   useEffect(() => {
     if (!isRunning) fitVisibleNodes(sigma, nodeIds);
