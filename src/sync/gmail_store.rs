@@ -89,6 +89,15 @@ pub(super) fn persist_message(
             participant.name.as_deref(),
             role,
         )?;
+        crate::relationships::observe_member(
+            crm,
+            source_id,
+            &message.thread_id,
+            crate::relationships::ConversationMember {
+                identity: &participant.email,
+                display_name: participant.name.as_deref(),
+            },
+        )?;
     }
     import_attachments(crm, &interaction_id, &message.id, &message.payload)?;
     crm.execute(
@@ -165,6 +174,93 @@ pub(super) fn prune_legacy_noise(crm: &Connection, source_id: &str) -> Result<us
 mod tests {
     use super::*;
     use crate::db;
+    use crate::gmail::MessagePart;
+    use crate::gmail::api::{Header, MessageBody};
+    use base64::Engine as _;
+
+    fn message(id: &str, thread_id: &str, body: &str) -> GmailMessage {
+        GmailMessage {
+            id: id.into(),
+            thread_id: thread_id.into(),
+            label_ids: Vec::new(),
+            internal_date: "0".into(),
+            payload: MessagePart {
+                mime_type: "text/plain".into(),
+                filename: String::new(),
+                headers: vec![Header {
+                    name: "From".into(),
+                    value: "Me <me@example.com>".into(),
+                }],
+                body: MessageBody {
+                    size: body.len() as i64,
+                    data: Some(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(body)),
+                    attachment_id: None,
+                },
+                parts: Vec::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn shared_thread_members_create_a_relationship_without_analysis() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = db::open(&directory.path().join("crm.sqlite3")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO sources(id, kind) VALUES ('gmail:test', 'gmail')",
+                [],
+            )
+            .unwrap();
+        for (id, name, email) in [
+            ("a", "Alex", "alex@example.com"),
+            ("b", "Blair", "blair@example.com"),
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state)
+                 VALUES (?1, ?2, ?1, 'active')",
+                    params![id, name],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO identities(id, person_id, kind, value, normalized_value)
+                 VALUES (?1, ?1, 'email', ?2, ?2)",
+                    params![id, email],
+                )
+                .unwrap();
+        }
+        let participants = vec![
+            Mailbox {
+                email: "alex@example.com".into(),
+                name: Some("Alex".into()),
+            },
+            Mailbox {
+                email: "blair@example.com".into(),
+                name: Some("Blair".into()),
+            },
+        ];
+
+        persist_message(
+            &connection,
+            "gmail:test",
+            &message("message", "thread", "Dinner next week?"),
+            true,
+            false,
+            &participants,
+        )
+        .unwrap();
+        crate::relationships::reconcile_source(&connection, "gmail:test").unwrap();
+
+        let relationship: (String, String) = connection
+            .query_row(
+                "SELECT source_person_id, target_person_id FROM relationships",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(relationship, ("a".into(), "b".into()));
+    }
 
     #[test]
     fn prunes_legacy_noise_but_keeps_linked_people_and_qualified_candidates() {

@@ -71,6 +71,17 @@ pub(crate) fn run_with_progress(
     if matches!(target, SyncTarget::Gmail) && !config.gmail.accounts.is_empty() {
         reports.extend(gmail::sync(config, crm, progress)?);
     }
+    if matches!(target, SyncTarget::Contacts) {
+        crate::relationships::rebind_unresolved_members(crm)?;
+        crate::relationships::reconcile_all(crm)?;
+    } else {
+        for source in &reports {
+            if matches!(target, SyncTarget::Gmail) {
+                crate::relationships::rebuild_members_from_interactions(crm, &source.source)?;
+            }
+            crate::relationships::reconcile_source(crm, &source.source)?;
+        }
+    }
     Ok(reports)
 }
 

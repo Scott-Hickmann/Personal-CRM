@@ -35,6 +35,16 @@ pub fn sync(
         "ZWACHATSESSION",
         &["Z_PK", "ZCONTACTJID", "ZPARTNERNAME", "ZREMOVED"],
     )?;
+    source.require_columns(
+        "ZWAGROUPMEMBER",
+        &[
+            "ZCHATSESSION",
+            "ZISACTIVE",
+            "ZMEMBERJID",
+            "ZCONTACTNAME",
+            "ZFIRSTNAME",
+        ],
+    )?;
     let mut statement = source.connection().prepare(
         "SELECT m.Z_PK, m.ZSTANZAID, s.ZCONTACTJID, datetime(m.ZMESSAGEDATE + 978307200, 'unixepoch'),
                 m.ZISFROMME, m.ZTEXT, m.ZFROMJID, m.ZTOJID, m.ZMESSAGETYPE,
@@ -92,11 +102,12 @@ pub fn sync(
             if from_me { "outgoing" } else { "incoming" },
             occurred_at.get(..10).unwrap_or(&occurred_at),
         )]);
+        let thread_native_id: Option<String> = row.get(2)?;
         let interaction_id = upsert_interaction(
             crm,
             "whatsapp",
             &native_id,
-            row.get::<_, Option<String>>(2)?.as_deref(),
+            thread_native_id.as_deref(),
             "whatsapp",
             "message",
             &occurred_at,
@@ -106,11 +117,11 @@ pub fn sync(
             &serde_json::json!({"message_type": row.get::<_, i64>(8)?}),
             &source.run_at,
         )?;
-        if let Some(identity) = if from_me { recipient } else { sender } {
+        if let Some(identity) = identity {
             replace_participant(
                 crm,
                 &interaction_id,
-                identities.resolve(&identity),
+                identities.resolve(identity),
                 display_name.as_deref(),
                 if from_me { "recipient" } else { "sender" },
             )?;
@@ -124,6 +135,9 @@ pub fn sync(
             "messages",
         );
     }
+    drop(rows);
+    drop(statement);
+    refresh_memberships(source.connection(), crm, &identities)?;
     progress.finish_stage(
         "Read WhatsApp conversations",
         processed,
@@ -145,6 +159,70 @@ pub fn sync(
     })
 }
 
+fn refresh_memberships(
+    source: &Connection,
+    crm: &Connection,
+    identities: &LidResolver,
+) -> Result<()> {
+    let mut chats = source.prepare(
+        "SELECT Z_PK, ZCONTACTJID, NULLIF(ZPARTNERNAME, '') FROM ZWACHATSESSION
+         WHERE COALESCE(ZREMOVED, 0)=0 AND ZCONTACTJID IS NOT NULL",
+    )?;
+    let rows = chats
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut roster = source.prepare(
+        "SELECT ZMEMBERJID, COALESCE(NULLIF(ZCONTACTNAME, ''), NULLIF(ZFIRSTNAME, ''))
+         FROM ZWAGROUPMEMBER
+         WHERE ZCHATSESSION=?1 AND COALESCE(ZISACTIVE, 1)=1 AND ZMEMBERJID IS NOT NULL
+         ORDER BY ZMEMBERJID",
+    )?;
+    for (chat_id, thread_native_id, partner_name) in rows {
+        let group = roster
+            .query_map([chat_id], |member| {
+                Ok((
+                    member.get::<_, String>(0)?,
+                    member.get::<_, Option<String>>(1)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let resolved = if group.is_empty() {
+            vec![(
+                identities.resolve(&thread_native_id),
+                partner_name.as_deref(),
+            )]
+        } else {
+            group
+                .iter()
+                .map(|(identity, name)| (identities.resolve(identity), name.as_deref()))
+                .collect()
+        };
+        let members = resolved
+            .iter()
+            .map(
+                |(identity, name)| crate::relationships::ConversationMember {
+                    identity,
+                    display_name: *name,
+                },
+            )
+            .collect::<Vec<_>>();
+        crate::relationships::replace_members(
+            crm,
+            "whatsapp",
+            &thread_native_id,
+            partner_name.as_deref(),
+            &members,
+        )?;
+    }
+    Ok(())
+}
+
 fn removed_message_ids(connection: &Connection) -> Result<Vec<String>> {
     let mut statement = connection.prepare(
         "SELECT COALESCE(m.ZSTANZAID, 'pk:' || m.Z_PK)
@@ -158,131 +236,5 @@ fn removed_message_ids(connection: &Connection) -> Result<Vec<String>> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::{Config, SourcePaths};
-
-    fn fixture(count: i64) -> (tempfile::TempDir, std::path::PathBuf, Connection, Config) {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("ChatStorage.sqlite");
-        let source = Connection::open(&path).unwrap();
-        source
-            .execute_batch(
-                "CREATE TABLE ZWACHATSESSION (
-                    Z_PK INTEGER PRIMARY KEY, ZCONTACTJID TEXT, ZPARTNERNAME TEXT,
-                    ZREMOVED INTEGER
-                 );
-                 CREATE TABLE ZWAPROFILEPUSHNAME (ZJID TEXT, ZPUSHNAME TEXT);
-                 CREATE TABLE ZWAMESSAGE (
-                    Z_PK INTEGER PRIMARY KEY, ZSTANZAID TEXT, ZMESSAGEDATE REAL,
-                    ZISFROMME INTEGER, ZTEXT TEXT, ZFROMJID TEXT, ZTOJID TEXT,
-                    ZMESSAGETYPE INTEGER, ZPUSHNAME TEXT, ZCHATSESSION INTEGER
-                 );
-                 INSERT INTO ZWACHATSESSION VALUES
-                    (1, '15550100@s.whatsapp.net', 'Alex', 0);",
-            )
-            .unwrap();
-        source
-            .execute(
-                "WITH RECURSIVE sequence(value) AS (
-                    SELECT 1 UNION ALL SELECT value + 1 FROM sequence WHERE value < ?1
-                 )
-                 INSERT INTO ZWAMESSAGE
-                 SELECT value, printf('message-%d', value), value, 0, 'hello',
-                        '15550100@s.whatsapp.net', '19990100@s.whatsapp.net',
-                        0, 'Alex', 1 FROM sequence",
-                [count],
-            )
-            .unwrap();
-        let crm = crate::db::open(&directory.path().join("crm.sqlite3")).unwrap();
-        let mut config = Config::new("Me".into(), Vec::new()).unwrap();
-        config.paths = SourcePaths {
-            whatsapp: Some(path.clone()),
-            ..SourcePaths::default()
-        };
-        (directory, path, crm, config)
-    }
-
-    #[test]
-    fn incremental_sync_reads_only_the_cursor_overlap_and_new_rows() {
-        let (_directory, path, crm, config) = fixture(1_005);
-        let mut progress = ProgressTracker::disabled();
-        assert_eq!(
-            sync(&config, &crm, &mut progress, 1, 1).unwrap().imported,
-            1_005
-        );
-        let source = Connection::open(path).unwrap();
-        crm.execute(
-            "UPDATE interactions SET analysis_state='complete' WHERE native_id='message-1005'",
-            [],
-        )
-        .unwrap();
-        source
-            .execute("UPDATE ZWAMESSAGE SET ZTEXT='edited' WHERE Z_PK=1005", [])
-            .unwrap();
-        source
-            .execute(
-                "INSERT INTO ZWAMESSAGE VALUES
-                 (1006, 'message-1006', 1006, 0, 'new', '15550100@s.whatsapp.net',
-                  '19990100@s.whatsapp.net', 0, 'Alex', 1)",
-                [],
-            )
-            .unwrap();
-
-        let report = sync(&config, &crm, &mut progress, 1, 1).unwrap();
-
-        assert_eq!(report.imported, 1_001);
-        let cursor: String = crm
-            .query_row(
-                "SELECT cursor FROM sources WHERE id='whatsapp'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(cursor, "1006");
-        let state: String = crm
-            .query_row(
-                "SELECT analysis_state FROM interactions WHERE native_id='message-1005'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(state, "pending");
-    }
-
-    #[test]
-    fn daily_full_audit_tombstones_hard_deletions() {
-        let (_directory, path, crm, config) = fixture(2);
-        let mut progress = ProgressTracker::disabled();
-        sync(&config, &crm, &mut progress, 1, 1).unwrap();
-        let source = Connection::open(path).unwrap();
-        source
-            .execute("DELETE FROM ZWAMESSAGE WHERE Z_PK=2", [])
-            .unwrap();
-        crm.execute(
-            "UPDATE sources SET last_reconcile_at='2000-01-01' WHERE id='whatsapp'",
-            [],
-        )
-        .unwrap();
-
-        let report = sync(&config, &crm, &mut progress, 1, 1).unwrap();
-
-        assert_eq!(report.deleted, 1);
-        let deleted: bool = crm
-            .query_row(
-                "SELECT deleted_at IS NOT NULL FROM interactions WHERE native_id='message-2'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(deleted);
-        let cursor: String = crm
-            .query_row(
-                "SELECT cursor FROM sources WHERE id='whatsapp'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(cursor, "1");
-    }
-}
+#[path = "whatsapp/tests.rs"]
+mod tests;

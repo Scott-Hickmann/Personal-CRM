@@ -24,7 +24,8 @@ pub struct GraphEdge {
     pub source: String,
     pub target: String,
     pub relationship_type: String,
-    pub confidence: f64,
+    pub classification_confidence: f64,
+    pub shared_context_count: i64,
 }
 
 struct RelationshipRow {
@@ -33,7 +34,8 @@ struct RelationshipRow {
     target_id: String,
     target_name: String,
     relationship_type: String,
-    confidence: f64,
+    classification_confidence: f64,
+    shared_context_count: i64,
 }
 
 pub fn build(
@@ -47,7 +49,8 @@ pub fn build(
         ));
     }
     let base = "SELECT r.source_person_id, source.display_name, r.target_person_id,
-                target.display_name, r.relationship_type, r.confidence
+                target.display_name, r.relationship_type,
+                COALESCE(r.classification_confidence, 0.0), r.shared_context_count
                 FROM relationships r
                 JOIN people source ON source.id=r.source_person_id AND source.lifecycle_state='active'
                 JOIN people target ON target.id=r.target_person_id AND target.lifecycle_state='active'";
@@ -55,15 +58,19 @@ pub fn build(
         collect(
             connection,
             &format!(
-                "{base} WHERE r.confidence >= ?1 AND (r.source_person_id=?2 OR r.target_person_id=?2)
-                 ORDER BY r.confidence DESC"
+                "{base} WHERE COALESCE(r.classification_confidence, 0.0) >= ?1
+                 AND (r.source_person_id=?2 OR r.target_person_id=?2)
+                 ORDER BY r.classification_confidence DESC"
             ),
             params![min_confidence, person_id],
         )?
     } else {
         collect(
             connection,
-            &format!("{base} WHERE r.confidence >= ?1 ORDER BY r.confidence DESC"),
+            &format!(
+                "{base} WHERE COALESCE(r.classification_confidence, 0.0) >= ?1
+                 ORDER BY r.classification_confidence DESC"
+            ),
             [min_confidence],
         )?
     };
@@ -84,7 +91,8 @@ fn collect<P: rusqlite::Params>(
                 target_id: row.get(2)?,
                 target_name: row.get(3)?,
                 relationship_type: row.get(4)?,
-                confidence: row.get(5)?,
+                classification_confidence: row.get(5)?,
+                shared_context_count: row.get(6)?,
             })
         })?
         .collect::<std::result::Result<_, _>>()?)
@@ -115,7 +123,8 @@ fn assemble(rows: Vec<RelationshipRow>) -> Result<ConnectionGraph> {
             source: identifiers[&row.source_id].clone(),
             target: identifiers[&row.target_id].clone(),
             relationship_type: row.relationship_type,
-            confidence: row.confidence,
+            classification_confidence: row.classification_confidence,
+            shared_context_count: row.shared_context_count,
         })
         .collect::<Vec<_>>();
     let mut lines = vec!["graph LR".to_owned()];
@@ -124,10 +133,10 @@ fn assemble(rows: Vec<RelationshipRow>) -> Result<ConnectionGraph> {
     }
     for edge in &edges {
         lines.push(format!(
-            "    {} -- \"{} {:.0}%\" --> {}",
+            "    {} -- \"{} {:.0}%\" --- {}",
             edge.source,
             escape(&edge.relationship_type),
-            edge.confidence * 100.0,
+            edge.classification_confidence * 100.0,
             edge.target
         ));
     }

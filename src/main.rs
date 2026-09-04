@@ -36,6 +36,7 @@ mod photos_review;
 mod progress;
 mod query;
 mod relationship_signals;
+mod relationships;
 mod repository;
 mod review;
 mod review_candidates;

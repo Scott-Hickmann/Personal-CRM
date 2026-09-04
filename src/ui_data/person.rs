@@ -97,13 +97,15 @@ fn relationships(connection: &Connection, person_id: &str) -> Result<Vec<Relatio
         "SELECT r.id,
                 CASE WHEN r.source_person_id=?1 THEN target.id ELSE source.id END,
                 CASE WHEN r.source_person_id=?1 THEN target.display_name ELSE source.display_name END,
-                r.relationship_type, r.confidence, r.status, r.evidence_json,
+                r.relationship_type, COALESCE(r.classification_confidence, 0.0),
+                r.classification_state, r.classification_evidence,
+                r.evidence_message_ids_json, r.shared_context_count,
                 r.first_observed_at, r.last_observed_at
          FROM relationships r
          JOIN people source ON source.id=r.source_person_id
          JOIN people target ON target.id=r.target_person_id
          WHERE r.source_person_id=?1 OR r.target_person_id=?1
-         ORDER BY r.confidence DESC, r.last_observed_at DESC",
+         ORDER BY r.classification_confidence DESC, r.last_observed_at DESC",
     )?;
     Ok(statement
         .query_map([person_id], |row| {
@@ -112,11 +114,13 @@ fn relationships(connection: &Connection, person_id: &str) -> Result<Vec<Relatio
                 person_id: row.get(1)?,
                 display_name: row.get(2)?,
                 relationship_type: row.get(3)?,
-                confidence: row.get(4)?,
-                status: row.get(5)?,
-                evidence: json(row.get(6)?),
-                first_observed_at: row.get(7)?,
-                last_observed_at: row.get(8)?,
+                classification_confidence: row.get(4)?,
+                classification_state: row.get(5)?,
+                classification_evidence: row.get(6)?,
+                evidence_message_ids: json(row.get(7)?),
+                shared_context_count: row.get(8)?,
+                first_observed_at: row.get(9)?,
+                last_observed_at: row.get(10)?,
             })
         })?
         .collect::<std::result::Result<_, _>>()?)

@@ -110,8 +110,13 @@ mod tests {
                  INSERT INTO interaction_participants(interaction_id, person_id, identity_value, role)
                  VALUES ('interaction', 'legacy', 'legacy@example.com', 'sender');
                  INSERT INTO relationships(
-                     id, source_person_id, target_person_id, relationship_type, confidence
-                 ) VALUES ('relationship', 'legacy', 'other', 'knows', 0.8);
+                     id, source_person_id, target_person_id, relationship_type,
+                     classification_confidence, classification_state,
+                     first_observed_at, last_observed_at, shared_context_count
+                 ) VALUES (
+                     'relationship', 'legacy', 'other', 'professional', 0.8, 'complete',
+                     '2026-01-01', '2026-01-01', 1
+                 );
                  INSERT INTO mentions(id, interaction_id, text, person_id, confidence, status)
                  VALUES ('mention', 'interaction', 'Legacy', 'legacy', 0.8, 'resolved');",
             )

@@ -58,7 +58,6 @@ pub(super) struct ContentOutput {
 pub(super) struct OutputMention {
     pub name: String,
     pub confidence: f64,
-    pub relationship_type: String,
 }
 
 #[derive(Debug, Deserialize)]

@@ -183,7 +183,11 @@ pub(crate) struct HistoryArgs {
 #[derive(Args)]
 pub(crate) struct GraphArgs {
     pub person: Option<String>,
-    #[arg(long, default_value_t = 0.7)]
+    #[arg(
+        long,
+        default_value_t = 0.0,
+        help = "Minimum classification confidence"
+    )]
     pub min_confidence: f64,
 }
 

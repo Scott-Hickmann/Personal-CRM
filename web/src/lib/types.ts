@@ -17,7 +17,8 @@ export type GraphEdge = {
   source: string;
   target: string;
   relationship_type: string;
-  confidence: number;
+  classification_confidence: number;
+  shared_context_count: number;
 };
 
 export type Overview = {
@@ -95,9 +96,11 @@ export type Relationship = {
   person_id: string;
   display_name: string;
   relationship_type: string;
-  confidence: number;
-  status: string;
-  evidence: unknown;
+  classification_confidence: number;
+  classification_state: string;
+  classification_evidence: string;
+  evidence_message_ids: string[];
+  shared_context_count: number;
   first_observed_at: string | null;
   last_observed_at: string | null;
 };

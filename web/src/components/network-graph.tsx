@@ -5,9 +5,9 @@ import { useTheme } from "next-themes";
 import { useRouter } from "next/navigation";
 import { SigmaContainer, useRegisterEvents, useSetSettings, useSigma } from "@react-sigma/core";
 import { useWorkerLayoutForceAtlas2 } from "@react-sigma/layout-forceatlas2";
-import { MultiDirectedGraph } from "graphology";
+import { MultiUndirectedGraph } from "graphology";
 import type Sigma from "sigma";
-import { drawDiscNodeLabel, EdgeArrowProgram, NodeCircleProgram } from "sigma/rendering";
+import { drawDiscNodeLabel, NodeCircleProgram } from "sigma/rendering";
 import type { Settings } from "sigma/settings";
 import { Focus, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -38,7 +38,6 @@ type EdgeAttributes = {
   confidence: number;
   label: string;
   size: number;
-  type: "arrow";
 };
 
 export function NetworkGraph({ overview, focusedPerson }: { overview: Overview; focusedPerson?: string }) {
@@ -66,7 +65,7 @@ export function NetworkGraph({ overview, focusedPerson }: { overview: Overview; 
       const source = graphPeople.get(edge.source);
       const target = graphPeople.get(edge.target);
       if (!source || !target || source.is_self || target.is_self) return;
-      if (edge.confidence < confidence[0] || (relationship !== "all" && edge.relationship_type !== relationship)) return;
+      if (edge.classification_confidence < confidence[0] || (relationship !== "all" && edge.relationship_type !== relationship)) return;
       if (tier !== "all" && source.affinity_tier !== tier && target.affinity_tier !== tier) return;
       if (activity !== "all" && source.activity_state !== activity && target.activity_state !== activity) return;
       if (term && ![source, target].some((person) => personSearchText(person).includes(term))) return;
@@ -87,7 +86,6 @@ export function NetworkGraph({ overview, focusedPerson }: { overview: Overview; 
 
   const settings = useMemo<Partial<Settings<NodeAttributes, EdgeAttributes>>>(() => ({
     allowInvalidContainer: true,
-    defaultEdgeType: "arrow",
     hideEdgesOnMove: true,
     hideLabelsOnMove: false,
     labelDensity: 0.45,
@@ -98,7 +96,6 @@ export function NetworkGraph({ overview, focusedPerson }: { overview: Overview; 
     minEdgeThickness: 0.4,
     minCameraRatio: 0.08,
     nodeProgramClasses: { circle: NodeCircleProgram },
-    edgeProgramClasses: { arrow: EdgeArrowProgram },
     renderEdgeLabels: true,
     stagePadding: 40,
   }), []);
@@ -109,7 +106,7 @@ export function NetworkGraph({ overview, focusedPerson }: { overview: Overview; 
       <GraphSelect label="Relationship" value={relationship} onChange={setRelationship} options={relationshipTypes} />
       <GraphSelect label="Tier" value={tier} onChange={setTier} options={["core", "close", "familiar", "acquaintance", "peripheral"]} />
       <GraphSelect label="Activity" value={activity} onChange={setActivity} options={["active", "cooling", "dormant", "never"]} />
-      <div className="space-y-3"><Label>Confidence ≥ {Math.round(confidence[0] * 100)}%</Label><Slider value={confidence} onValueChange={setConfidence} min={0} max={1} step={0.05} /></div>
+      <div className="space-y-3"><Label>Classification confidence ≥ {Math.round(confidence[0] * 100)}%</Label><Slider value={confidence} onValueChange={setConfidence} min={0} max={1} step={0.05} /></div>
       <Button variant="outline" onClick={() => setFitRequest((request) => request + 1)}><Focus />Fit</Button>
     </CardContent></Card>
 
@@ -242,7 +239,7 @@ function GraphController({ dark, edgeIds, fitRequest, focusedNode, layout, nodeI
 }
 
 function createGraph(overview: Overview, people: Map<string, Overview["people"][number]>) {
-  const graph = new MultiDirectedGraph<NodeAttributes, EdgeAttributes>();
+  const graph = new MultiUndirectedGraph<NodeAttributes, EdgeAttributes>();
   const allowedNodes = overview.graph.nodes.filter((node) => {
     const person = people.get(node.person_id);
     return person && !person.is_self;
@@ -264,10 +261,9 @@ function createGraph(overview: Overview, people: Map<string, Overview["people"][
     if (!graph.hasNode(edge.source) || !graph.hasNode(edge.target)) return;
     graph.addEdgeWithKey(`edge-${index}`, edge.source, edge.target, {
       color: "#a3a3a3",
-      confidence: edge.confidence,
+      confidence: edge.classification_confidence,
       label: titleCase(edge.relationship_type),
-      size: 0.35 + edge.confidence * 0.85,
-      type: "arrow",
+      size: 0.35 + edge.classification_confidence * 0.85,
     });
   });
   graph.forEachNode((node, attributes) => {
@@ -276,7 +272,7 @@ function createGraph(overview: Overview, people: Map<string, Overview["people"][
   return graph;
 }
 
-function assignStaticLayout(graph: MultiDirectedGraph<NodeAttributes, EdgeAttributes>, layout: string) {
+function assignStaticLayout(graph: MultiUndirectedGraph<NodeAttributes, EdgeAttributes>, layout: string) {
   const nodes = graph.nodes();
   const columns = Math.max(1, Math.ceil(Math.sqrt(nodes.length)));
   nodes.forEach((node, index) => {

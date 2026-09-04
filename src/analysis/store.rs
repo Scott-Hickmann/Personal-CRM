@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use rusqlite::{Connection, OptionalExtension, params};
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::AnalysisReport;
@@ -26,7 +25,6 @@ pub(super) fn persist(
         selected: inputs.len(),
         analyzed: 0,
         mentions: 0,
-        relationships: 0,
         relationship_signals: 0,
     };
     if output.items.len() != embeddings.len() {
@@ -82,15 +80,7 @@ pub(super) fn persist(
         }
         let source_people = source_people(&transaction, &item.interaction_id)?;
         for mention in item.mentions {
-            report.mentions += persist_mention(
-                &transaction,
-                &source_people,
-                &item.interaction_id,
-                &input.occurred_at,
-                &config.mlx.generation_model,
-                mention,
-                &mut report.relationships,
-            )?;
+            report.mentions += persist_mention(&transaction, &item.interaction_id, mention)?;
         }
         persist_summary(
             &transaction,
@@ -119,12 +109,8 @@ pub(super) fn persist(
 
 fn persist_mention(
     connection: &Connection,
-    sources: &[String],
     interaction_id: &str,
-    occurred_at: &str,
-    model: &str,
     mention: OutputMention,
-    relationship_count: &mut usize,
 ) -> Result<usize> {
     if mention.name.trim().is_empty() {
         return Ok(0);
@@ -146,20 +132,6 @@ fn persist_mention(
             }
         ],
     )?;
-    if let Some(target) = target {
-        for source in sources.iter().filter(|source| **source != target) {
-            upsert_relationship(
-                connection,
-                source,
-                &target,
-                &mention,
-                interaction_id,
-                occurred_at,
-                model,
-            )?;
-            *relationship_count += 1;
-        }
-    }
     Ok(1)
 }
 
@@ -212,49 +184,6 @@ fn resolve_exact_person(connection: &Connection, name: &str) -> Result<Option<St
         )
         .optional()
         .map_err(Into::into)
-}
-
-fn upsert_relationship(
-    connection: &Connection,
-    source: &str,
-    target: &str,
-    mention: &OutputMention,
-    interaction_id: &str,
-    occurred_at: &str,
-    model: &str,
-) -> Result<()> {
-    let relationship_type = relationship_type(&mention.relationship_type);
-    let id = stable_id(&format!("{source}\0{target}\0{relationship_type}"));
-    let evidence = serde_json::json!([{"interaction_id": interaction_id}]).to_string();
-    connection.execute(
-        "INSERT INTO relationships(id, source_person_id, target_person_id, relationship_type, confidence,
-         status, evidence_json, model_version, first_observed_at, last_observed_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'inferred', ?6, ?7, ?8, ?8)
-         ON CONFLICT(id) DO UPDATE SET confidence=MAX(confidence, excluded.confidence),
-         evidence_json=excluded.evidence_json, model_version=excluded.model_version,
-         last_observed_at=MAX(last_observed_at, excluded.last_observed_at)",
-        params![id, source, target, relationship_type, mention.confidence.clamp(0.0, 1.0), evidence, model, occurred_at],
-    )?;
-    Ok(())
-}
-
-fn relationship_type(value: &str) -> String {
-    let value: String = value
-        .trim()
-        .to_lowercase()
-        .chars()
-        .filter(|character| character.is_ascii_alphabetic() || *character == '-')
-        .take(40)
-        .collect();
-    if value.is_empty() {
-        "unclear".into()
-    } else {
-        value
-    }
-}
-
-fn stable_id(value: &str) -> String {
-    format!("{:x}", Sha256::digest(value.as_bytes()))
 }
 
 fn serialization(error: serde_json::Error) -> CrmError {

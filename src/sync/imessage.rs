@@ -26,6 +26,8 @@ pub fn sync(
         "message",
         &["guid", "date", "is_from_me", "text"],
     )?;
+    source.require_columns("chat_handle_join", &["chat_id", "handle_id"])?;
+    source.require_columns("handle", &["ROWID", "id"])?;
     let mut statement = source.connection().prepare(
         "SELECT m.guid, COALESCE(c.guid, c.chat_identifier), COALESCE(m.service, 'iMessage'),
                 datetime((m.date / 1000000000) + 978307200, 'unixepoch'), m.is_from_me,
@@ -76,11 +78,12 @@ pub fn sync(
                 .unwrap_or(if from_me { "outgoing" } else { "incoming" }),
             occurred_at.get(..10).unwrap_or(&occurred_at),
         )]);
+        let thread_native_id: Option<String> = row.get(1)?;
         let interaction_id = upsert_interaction(
             crm,
             "imessage",
             &native_id,
-            row.get::<_, Option<String>>(1)?.as_deref(),
+            thread_native_id.as_deref(),
             &row.get::<_, String>(2)?,
             "message",
             &occurred_at,
@@ -108,6 +111,9 @@ pub fn sync(
             "messages",
         );
     }
+    drop(rows);
+    drop(statement);
+    refresh_memberships(source.connection(), crm)?;
     progress.finish_stage(
         "Read iMessage conversations",
         processed,
@@ -125,4 +131,99 @@ pub fn sync(
         schema_fingerprint: source.fingerprint.clone(),
         changed: !imported.is_empty() || deleted > 0,
     })
+}
+
+fn refresh_memberships(source: &Connection, crm: &Connection) -> Result<()> {
+    let mut chats = source.prepare(
+        "SELECT ROWID, COALESCE(guid, chat_identifier), NULLIF(display_name, '') FROM chat
+         WHERE COALESCE(guid, chat_identifier) IS NOT NULL",
+    )?;
+    let rows = chats
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut roster = source.prepare(
+        "SELECT h.id FROM chat_handle_join chj JOIN handle h ON h.ROWID=chj.handle_id
+         WHERE chj.chat_id=?1 ORDER BY h.id",
+    )?;
+    for (chat_id, thread_native_id, title) in rows {
+        let identities = roster
+            .query_map([chat_id], |member| member.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let members = identities
+            .iter()
+            .map(|identity| crate::relationships::ConversationMember {
+                identity,
+                display_name: None,
+            })
+            .collect::<Vec<_>>();
+        crate::relationships::replace_members(
+            crm,
+            "imessage",
+            &thread_native_id,
+            title.as_deref(),
+            &members,
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+    use rusqlite::params;
+
+    #[test]
+    fn group_roster_includes_silent_members() {
+        let source = Connection::open_in_memory().unwrap();
+        source
+            .execute_batch(
+                "CREATE TABLE chat(ROWID INTEGER PRIMARY KEY, guid TEXT, chat_identifier TEXT, display_name TEXT);
+             CREATE TABLE handle(ROWID INTEGER PRIMARY KEY, id TEXT NOT NULL);
+             CREATE TABLE chat_handle_join(chat_id INTEGER, handle_id INTEGER);
+             INSERT INTO chat VALUES (1, 'group', 'group', 'Weekend crew');
+             INSERT INTO handle VALUES (1, '+15550100'), (2, '+15550200');
+             INSERT INTO chat_handle_join VALUES (1, 1), (1, 2);",
+            )
+            .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let crm = db::open(&directory.path().join("crm.sqlite3")).unwrap();
+        crm.execute(
+            "INSERT INTO sources(id, kind) VALUES ('imessage', 'imessage')",
+            [],
+        )
+        .unwrap();
+        for (id, name, identity) in [("a", "Alex", "15550100"), ("b", "Blair", "15550200")] {
+            crm.execute(
+                "INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state)
+                 VALUES (?1, ?2, ?1, 'active')",
+                params![id, name],
+            )
+            .unwrap();
+            crm.execute(
+                "INSERT INTO identities(id, person_id, kind, value, normalized_value)
+                 VALUES (?1, ?1, 'phone', ?2, ?2)",
+                params![id, identity],
+            )
+            .unwrap();
+        }
+
+        refresh_memberships(&source, &crm).unwrap();
+
+        let count: i64 = crm
+            .query_row(
+                "SELECT COUNT(DISTINCT person_id) FROM conversation_memberships
+             WHERE source_id='imessage' AND thread_native_id='group'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+    }
 }

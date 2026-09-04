@@ -33,7 +33,6 @@ pub struct AnalysisReport {
     pub selected: usize,
     pub analyzed: usize,
     pub mentions: usize,
-    pub relationships: usize,
     pub relationship_signals: usize,
 }
 
@@ -59,7 +58,6 @@ pub fn run(
             selected: 0,
             analyzed: 0,
             mentions: 0,
-            relationships: 0,
             relationship_signals: 0,
         });
     }
@@ -78,7 +76,6 @@ fn analyze_interactions(
         selected: ids.len(),
         analyzed: 0,
         mentions: 0,
-        relationships: 0,
         relationship_signals: 0,
     };
     progress.stage("Analyzing interactions", 2, 2, total, false, "interactions");
@@ -180,7 +177,6 @@ fn persist_ready(
         )?;
         report.analyzed += interaction_report.analyzed;
         report.mentions += interaction_report.mentions;
-        report.relationships += interaction_report.relationships;
         report.relationship_signals += interaction_report.relationship_signals;
     }
     Ok(())

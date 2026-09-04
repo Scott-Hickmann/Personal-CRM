@@ -14,6 +14,10 @@ fn review_refresh_resolves_candidate_from_deleted_whatsapp_chat() {
                  ZREMOVED INTEGER
              );
              CREATE TABLE ZWAPROFILEPUSHNAME (ZJID TEXT, ZPUSHNAME TEXT);
+             CREATE TABLE ZWAGROUPMEMBER (
+                 ZCHATSESSION INTEGER, ZISACTIVE INTEGER, ZMEMBERJID TEXT,
+                 ZCONTACTNAME TEXT, ZFIRSTNAME TEXT
+             );
              CREATE TABLE ZWAMESSAGE (
                  Z_PK INTEGER PRIMARY KEY, ZSTANZAID TEXT, ZMESSAGEDATE REAL,
                  ZISFROMME INTEGER, ZTEXT TEXT, ZFROMJID TEXT, ZTOJID TEXT,

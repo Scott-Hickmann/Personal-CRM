@@ -71,8 +71,13 @@ mod tests {
              INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state)
              VALUES ('other', 'Blair', 'apple-blair', 'active');
              INSERT INTO relationships(
-                 id, source_person_id, target_person_id, relationship_type, confidence
-             ) VALUES ('relationship', 'person', 'other', 'friend', 0.9);",
+                 id, source_person_id, target_person_id, relationship_type,
+                 classification_confidence, classification_state,
+                 first_observed_at, last_observed_at, shared_context_count
+             ) VALUES (
+                 'relationship', 'other', 'person', 'friend', 0.9, 'complete',
+                 '2026-01-01', '2026-01-01', 1
+             );",
             )
             .unwrap();
 

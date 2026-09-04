@@ -31,6 +31,10 @@ const MIGRATIONS: &[(i64, &str)] = &[
         14,
         include_str!("../migrations/014_contact_content_fingerprint.sql"),
     ),
+    (
+        15,
+        include_str!("../migrations/015_structural_relationships.sql"),
+    ),
 ];
 
 pub fn open(path: &Path) -> Result<Connection> {
@@ -101,7 +105,7 @@ mod tests {
         let path = directory.path().join("crm.sqlite3");
         drop(open(&path).unwrap());
         let connection = open(&path).unwrap();
-        assert_eq!(schema_version(&connection).unwrap(), 14);
+        assert_eq!(schema_version(&connection).unwrap(), 15);
     }
 
     #[test]
@@ -177,7 +181,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(schema_version(&connection).unwrap(), 14);
+        assert_eq!(schema_version(&connection).unwrap(), 15);
         assert_eq!(score, None);
         assert_eq!(state, "pending");
         assert_eq!(
@@ -187,6 +191,43 @@ mod tests {
                 .unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn structural_relationship_migration_backfills_shared_threads() {
+        let connection = Connection::open_in_memory().unwrap();
+        for (_, sql) in MIGRATIONS.iter().filter(|(version, _)| *version <= 14) {
+            connection.execute_batch(sql).unwrap();
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO sources(id, kind) VALUES ('gmail:test', 'gmail');
+                 INSERT INTO people(id, display_name, apple_contact_id, lifecycle_state) VALUES
+                   ('a', 'Alex', 'apple-a', 'active'),
+                   ('b', 'Blair', 'apple-b', 'active');
+                 INSERT INTO interactions(
+                   id, source_id, native_id, thread_native_id, channel, kind, occurred_at
+                 ) VALUES ('message', 'gmail:test', 'message', 'thread', 'gmail', 'email',
+                           '2026-01-01');
+                 INSERT INTO interaction_participants(
+                   interaction_id, person_id, identity_value, role
+                 ) VALUES
+                   ('message', 'a', 'alex@example.com', 'sender'),
+                   ('message', 'b', 'blair@example.com', 'recipient');",
+            )
+            .unwrap();
+
+        migrate(&connection).unwrap();
+
+        let relationship: (String, String, String) = connection
+            .query_row(
+                "SELECT source_person_id, target_person_id, classification_state
+                 FROM relationships",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(relationship, ("a".into(), "b".into(), "pending".into()));
     }
 
     #[test]
