@@ -41,17 +41,15 @@ export function createNetwork(overview: Overview): NetworkData {
   return { nodes: nodes.filter((node) => degree.has(node.id)), links };
 }
 
-export function filterNetwork(graph: NetworkData, query: string, tier: string, activity: string) {
+export function filterNetwork(graph: NetworkData, tier: string, activity: string) {
   const people = new Map(graph.nodes.map((node) => [node.id, node]));
   const nodes = new Set<string>();
   const links = new Set<string>();
-  const term = query.trim().toLocaleLowerCase();
   for (const link of graph.links) {
     const source = people.get(endpointId(link.source))!;
     const target = people.get(endpointId(link.target))!;
     if (tier !== "all" && source.tier !== tier && target.tier !== tier) continue;
     if (activity !== "all" && source.activity !== activity && target.activity !== activity) continue;
-    if (term && ![source, target].some((node) => node.search.includes(term))) continue;
     links.add(link.id); nodes.add(source.id); nodes.add(target.id);
   }
   return { nodes, links };

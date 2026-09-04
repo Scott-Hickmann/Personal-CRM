@@ -19,7 +19,7 @@ export function NetworkGraph({ overview, focusedPerson }: { overview: Overview; 
   const [layout, setLayout] = useState("organic");
   const [fitRequest, setFitRequest] = useState(0);
   const graph = useMemo(() => createNetwork(overview), [overview]);
-  const visible = useMemo(() => filterNetwork(graph, query, tier, activity), [graph, query, tier, activity]);
+  const visible = useMemo(() => filterNetwork(graph, tier, activity), [graph, tier, activity]);
   const term = query.trim().toLocaleLowerCase();
   const focused = term ? graph.nodes.find((node) => visible.nodes.has(node.id) && node.label.toLocaleLowerCase() === term)
     ?? graph.nodes.find((node) => visible.nodes.has(node.id) && node.search.includes(term)) : undefined;
@@ -31,6 +31,7 @@ export function NetworkGraph({ overview, focusedPerson }: { overview: Overview; 
       <GraphSelect label="Activity" value={activity} onChange={setActivity} options={["active", "cooling", "dormant", "never"]} />
       <Button variant="outline" onClick={() => setFitRequest((value) => value + 1)}><Focus />Fit</Button>
     </CardContent></Card>
+    {term && !focused && <p className="text-muted-foreground text-sm" role="status">No matching person in the current network. Try another name or adjust the filters.</p>}
     <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
       <p className="text-muted-foreground" aria-live="polite">Showing {visible.nodes.size} people and {visible.links.size} relationships</p>
       <div className="flex flex-wrap items-center gap-3">{Object.entries(tierColors).filter(([name]) => name !== "unknown").map(([name, color]) => <span key={name} className="flex items-center gap-1.5"><span className="size-2.5 rounded-full" style={{ backgroundColor: color }} />{titleCase(name)}</span>)}
