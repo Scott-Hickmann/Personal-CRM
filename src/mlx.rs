@@ -290,9 +290,15 @@ mod tests {
                 .unwrap()
                 .contains("Scores are integers")
         );
+        assert!(
+            prompt_file("classify-relationship.md")
+                .unwrap()
+                .contains("Classify the primary relationship")
+        );
         for name in [
             "analyze-content.schema.json",
             "analyze-relationship.schema.json",
+            "classify-relationship.schema.json",
         ] {
             assert!(serde_json::from_str::<serde_json::Value>(&prompt_file(name).unwrap()).is_ok());
         }

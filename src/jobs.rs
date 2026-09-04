@@ -301,6 +301,12 @@ fn enqueue_downstream(
             if changed {
                 enqueue(
                     connection,
+                    JobKind::Analysis,
+                    "contact links changed",
+                    Duration::zero(),
+                )?;
+                enqueue(
+                    connection,
                     JobKind::Suggestions,
                     "contact data changed",
                     Duration::zero(),

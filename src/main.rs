@@ -35,6 +35,7 @@ mod photos_prompt;
 mod photos_review;
 mod progress;
 mod query;
+mod relationship_classifier;
 mod relationship_signals;
 mod relationships;
 mod repository;

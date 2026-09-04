@@ -29,6 +29,7 @@ pub(crate) fn run_with_progress(
         JobKind::Gmail => run_sync(SyncTarget::Gmail, &config, &connection, progress)?,
         JobKind::Analysis => {
             analysis::run(&config, &connection, progress)?;
+            crate::relationship_classifier::run(&config, &connection, progress)?;
             true
         }
         JobKind::Scoring => {

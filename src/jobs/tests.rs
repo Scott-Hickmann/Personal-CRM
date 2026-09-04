@@ -168,7 +168,10 @@ fn changed_contacts_enqueue_all_contact_consumers() {
         .unwrap()
         .collect::<std::result::Result<_, _>>()
         .unwrap();
-    assert_eq!(kinds, ["gmail", "google_publish", "suggestions"]);
+    assert_eq!(
+        kinds,
+        ["analysis", "gmail", "google_publish", "suggestions"]
+    );
 }
 
 #[test]
