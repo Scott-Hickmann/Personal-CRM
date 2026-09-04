@@ -99,16 +99,15 @@ fn render(frame: &mut Frame, status: &Status, scroll: u16) {
             Constraint::Length(3),
             Constraint::Length(4),
             Constraint::Min(5),
-            Constraint::Length(7),
         ])
         .split(area)
     } else {
         Layout::vertical([
             Constraint::Length(3),
             Constraint::Length(4),
-            Constraint::Min(8),
-            Constraint::Length(8),
-            Constraint::Length(8),
+            Constraint::Min(10),
+            Constraint::Length(7),
+            Constraint::Length(7),
         ])
         .split(area)
     };
@@ -116,9 +115,7 @@ fn render(frame: &mut Frame, status: &Status, scroll: u16) {
     render_header(frame, sections[0], status);
     render_summary(frame, sections[1], status);
     render_jobs(frame, sections[2], status);
-    if compact {
-        render_events(frame, sections[3], status, scroll);
-    } else {
+    if !compact {
         render_sources(frame, sections[3], status);
         render_events(frame, sections[4], status, scroll);
     }
@@ -203,7 +200,11 @@ fn render_jobs(frame: &mut Frame, area: Rect, status: &Status) {
         return;
     }
 
-    let heights = vec![Constraint::Length(3); status.running_activity.len()];
+    let heights = status
+        .running_activity
+        .iter()
+        .map(|progress| Constraint::Length(3 + visible_focus_len(progress) as u16))
+        .collect::<Vec<_>>();
     for (progress, job_area) in status.running_activity.iter().zip(
         Layout::new(Direction::Vertical, heights)
             .split(inner)
@@ -214,6 +215,11 @@ fn render_jobs(frame: &mut Frame, area: Rect, status: &Status) {
 }
 
 fn render_job(frame: &mut Frame, area: Rect, progress: &ProgressSnapshot) {
+    let sections = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Length(visible_focus_len(progress) as u16),
+    ])
+    .split(area);
     let total = progress.total.max(progress.current);
     let ratio = if total == 0 {
         1.0
@@ -243,8 +249,32 @@ fn render_job(frame: &mut Frame, area: Rect, progress: &ProgressSnapshot) {
             .ratio(ratio.clamp(0.0, 1.0))
             .label(label)
             .use_unicode(true),
-        area,
+        sections[0],
     );
+    if !progress.focus.is_empty() {
+        let mut lines = progress
+            .focus
+            .iter()
+            .take(3)
+            .map(|item| {
+                Line::from(vec![
+                    Span::styled("  • ", Style::new().fg(Color::DarkGray)),
+                    Span::raw(item),
+                ])
+            })
+            .collect::<Vec<_>>();
+        if progress.focus.len() > 3 {
+            lines.push(Line::from(Span::styled(
+                format!("    +{} more in this batch", progress.focus.len() - 3),
+                Style::new().fg(Color::DarkGray),
+            )));
+        }
+        frame.render_widget(Paragraph::new(lines), sections[1]);
+    }
+}
+
+fn visible_focus_len(progress: &ProgressSnapshot) -> usize {
+    progress.focus.len().min(3) + usize::from(progress.focus.len() > 3)
 }
 
 fn render_sources(frame: &mut Frame, area: Rect, status: &Status) {
@@ -329,6 +359,12 @@ mod tests {
             current: 25,
             total: 100,
             unit: Some("messages".into()),
+            focus: vec![
+                "Alex · WhatsApp · incoming · Sep 3".into(),
+                "Jamie · WhatsApp · outgoing · Sep 3".into(),
+                "Morgan · WhatsApp · incoming · Sep 3".into(),
+                "Taylor · WhatsApp · outgoing · Sep 3".into(),
+            ],
             ..ProgressSnapshot::default()
         });
         let backend = TestBackend::new(100, 32);
@@ -341,5 +377,7 @@ mod tests {
         assert!(screen.contains("ANALYZED 4359"));
         assert!(screen.contains("25 / 100 messages"));
         assert!(screen.contains("stage 2 / 4"));
+        assert!(screen.contains("Alex · WhatsApp · incoming · Sep 3"));
+        assert!(screen.contains("+1 more in this batch"));
     }
 }

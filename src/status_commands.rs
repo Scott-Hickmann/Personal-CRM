@@ -71,7 +71,10 @@ pub(crate) fn run(format: Format, config_path: PathBuf, args: StatusArgs) -> Res
     if args.live {
         live(format, &config_path, &connection)
     } else {
-        let status = collect(&config_path, &connection)?;
+        let mut status = collect(&config_path, &connection)?;
+        for activity in &mut status.running_activity {
+            activity.focus.clear();
+        }
         let table = summary(&status);
         output::emit(format, "status", &status, table)
     }

@@ -7,6 +7,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 const EVENT_LIMIT: usize = 20;
+const FOCUS_ITEM_LIMIT: usize = 120;
 const WRITE_INTERVAL: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Copy)]
@@ -37,6 +38,8 @@ pub(crate) struct ProgressSnapshot {
     pub total: u64,
     pub total_is_estimate: bool,
     pub unit: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub focus: Vec<String>,
     pub updated_at: String,
     #[serde(default)]
     pub events: Vec<ProgressEvent>,
@@ -101,7 +104,18 @@ impl ProgressTracker {
         self.snapshot.total = total;
         self.snapshot.total_is_estimate = total_is_estimate;
         self.snapshot.unit = Some(unit.into());
+        self.snapshot.focus.clear();
         append_event(&mut self.snapshot, message);
+        self.write(true);
+    }
+
+    pub(crate) fn focus(&mut self, items: impl IntoIterator<Item = String>) {
+        self.snapshot.focus = items.into_iter().map(sanitize_focus).collect();
+        self.write(false);
+    }
+
+    pub(crate) fn focus_now(&mut self, items: impl IntoIterator<Item = String>) {
+        self.snapshot.focus = items.into_iter().map(sanitize_focus).collect();
         self.write(true);
     }
 
@@ -131,6 +145,7 @@ impl ProgressTracker {
     ) {
         let message = message.into();
         self.progress_now(&message, current, total, total_is_estimate, unit);
+        self.snapshot.focus.clear();
         append_event(&mut self.snapshot, message);
         self.write(true);
     }
@@ -168,6 +183,7 @@ impl ProgressTracker {
         self.snapshot.total = 0;
         self.snapshot.total_is_estimate = false;
         self.snapshot.unit = None;
+        self.snapshot.focus.clear();
         self.write(true);
     }
 
@@ -220,6 +236,7 @@ pub(crate) fn record_interrupted(config_path: &Path, count: usize) {
         );
         snapshot.state = "interrupted".into();
         snapshot.message.clone_from(&message);
+        snapshot.focus.clear();
         snapshot.updated_at = Utc::now().to_rfc3339();
         append_event(&mut snapshot, message);
         let _ = write_path(&path, &snapshot);
@@ -253,6 +270,25 @@ fn append_event(snapshot: &mut ProgressSnapshot, message: String) {
     }
 }
 
+fn sanitize_focus(value: String) -> String {
+    let normalized: String = value
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect();
+    let mut characters = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
+    if characters.chars().count() > FOCUS_ITEM_LIMIT {
+        characters = characters.chars().take(FOCUS_ITEM_LIMIT - 1).collect();
+        characters.push('…');
+    }
+    characters
+}
+
 fn write_path(path: &Path, snapshot: &ProgressSnapshot) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -282,6 +318,7 @@ mod tests {
             true,
             "emails",
         );
+        tracker.focus(["Alex\nSmith — a very long message".repeat(8)]);
         for index in 0..25 {
             tracker.event(format!("Event {index}"));
         }
@@ -291,6 +328,9 @@ mod tests {
         assert_eq!(snapshot.stage_current, 1);
         assert_eq!(snapshot.stage_total, 2);
         assert_eq!(snapshot.current, 10);
+        assert_eq!(snapshot.focus.len(), 1);
+        assert!(!snapshot.focus[0].contains('\n'));
+        assert_eq!(snapshot.focus[0].chars().count(), FOCUS_ITEM_LIMIT);
         assert_eq!(snapshot.total, 100);
         assert_eq!(snapshot.events.len(), EVENT_LIMIT);
         assert_eq!(snapshot.events.last().unwrap().message, "Event 24");
@@ -299,6 +339,7 @@ mod tests {
         let snapshot = read(&config_path, "gmail").unwrap();
         assert_eq!(snapshot.state, "idle");
         assert_eq!(snapshot.message, "Waiting for work");
+        assert!(snapshot.focus.is_empty());
     }
 
     #[test]
@@ -319,6 +360,7 @@ mod tests {
         let snapshot = read(&config_path, "analysis").unwrap();
         assert_eq!(snapshot.state, "interrupted");
         assert_eq!(snapshot.current, 96);
+        assert!(snapshot.focus.is_empty());
         assert_eq!(snapshot.total, 915);
         assert_eq!(
             snapshot.message,
