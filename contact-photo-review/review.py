@@ -12,8 +12,11 @@ import search
 class Contacts:
     def __init__(self, executable):
         self.executable = executable
+        self.script = Path(executable).parent.parent / "save_photo.applescript"
 
     def call(self, command, payload):
+        if command == "approve":
+            payload = {**payload, "script": str(self.script)}
         result = subprocess.run([str(self.executable), command], input=json.dumps(payload),
                                 capture_output=True, text=True, timeout=120)
         if result.returncode:
@@ -156,7 +159,7 @@ class Review:
         except Exception as error:
             with self.db:
                 self.db.execute("UPDATE approvals SET state='uncertain',error=? WHERE id=?", (str(error), approval_id))
-            raise ValueError(f"Save was not confirmed: {error}. Refresh before retrying; an existing photo will never be overwritten.") from error
+            raise ValueError(f"Save was not confirmed: {error}. Inspect Contacts before retrying; an existing photo will never be overwritten.") from error
         with self.db:
             self.db.execute("UPDATE approvals SET state='saved' WHERE id=?", (approval_id,))
             self.db.execute("UPDATE candidates SET status='approved' WHERE id=?", (candidate_id,))

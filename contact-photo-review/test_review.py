@@ -3,6 +3,7 @@ import html
 import http.client
 import json
 import socket
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -10,7 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from http.server import ThreadingHTTPServer
-from review import Review
+from review import Contacts, Review
 from crawler import Crawler
 from search import ImageResults, download, public_url
 from server import DemoContacts, handler
@@ -44,6 +45,16 @@ class ReviewTests(unittest.TestCase):
         self.review = Review(self.temp.name, self.native, search, lambda url: url.encode())
         self.addCleanup(self.review.db.close)
         self.review.refresh()
+
+    def test_native_approval_uses_project_contacts_app_script(self):
+        executable = Path(self.temp.name) / ".local" / "contacts"
+        executable.parent.mkdir(exist_ok=True)
+        native = Contacts(executable)
+        completed = subprocess.CompletedProcess([], 0, '{"saved":true}', "")
+        with patch("review.subprocess.run", return_value=completed) as run:
+            self.assertEqual(native.call("approve", {"id": "person"}), {"saved": True})
+        payload = json.loads(run.call_args.kwargs["input"])
+        self.assertEqual(payload["script"], str(Path(self.temp.name) / "save_photo.applescript"))
 
     def test_rejection_survives_restart_and_never_writes_contacts(self):
         first = self.review.candidate("demo-1")

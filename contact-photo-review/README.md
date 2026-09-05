@@ -64,13 +64,14 @@ included in automatic searches. Source-page links open directly in your browser.
 ## Safe saves and local data
 
 - Uses concrete Apple contact identifiers rather than name matching. Photo writes
-  use macOS's photo-only Address Book API so contacts with protected notes can be
-  updated without reading or faulting those notes. Linked cards can appear separately.
+  are performed by Contacts.app itself, which can safely preserve protected notes.
+  macOS may ask once whether the process running this app may control Contacts.
+  Linked cards can appear separately.
 - Immediately before saving, re-fetches the card, checks its identifying details,
   and refuses to replace an existing full-size or thumbnail photo. The native update
   sets only the photo; other fields are preserved. Apple Contacts does not offer an
   atomic conditional save, so avoid editing that same card during approval.
-- Saves a complete pre-change vCard through the same Address Book record before
+- Saves a complete pre-change vCard through Contacts.app before
   updating. A failed backup prevents the update.
   Checks the image checksum and verifies that a photo exists after saving.
 - Records an approval intent before the native save. If a save errors or is

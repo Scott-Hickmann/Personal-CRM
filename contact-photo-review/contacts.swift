@@ -1,6 +1,5 @@
 import Contacts
 import CryptoKit
-import AddressBook
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
@@ -100,6 +99,20 @@ func validateApproval(_ contact: CNContact, _ input: [String: String], _ data: D
                 "Photo must be a normalized JPEG")
 }
 
+func saveThroughContactsApp(_ script: String, _ id: String, _ image: String, _ backup: String) throws {
+    let process = Process()
+    let errors = Pipe()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+    process.arguments = [script, id, image, backup]
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = errors
+    try process.run()
+    process.waitUntilExit()
+    let message = String(data: errors.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    try require(process.terminationStatus == 0, message.isEmpty ? "Contacts.app did not save the photo" : message)
+}
+
 func mainCommand() throws {
     let command = CommandLine.arguments.dropFirst().first ?? ""
     let input = try JSONSerialization.jsonObject(with: FileHandle.standardInput.readDataToEndOfFile()) as? [String: String] ?? [:]
@@ -119,7 +132,7 @@ func mainCommand() throws {
         return
     }
     guard let id = input["id"], input["fingerprint"] != nil, let file = input["image"],
-          input["sha256"] != nil, let backupPath = input["backup"] else {
+          input["sha256"] != nil, let backupPath = input["backup"], let script = input["script"] else {
         throw Failure(message: "Incomplete approval")
     }
     let data = try Data(contentsOf: URL(fileURLWithPath: file))
@@ -127,16 +140,11 @@ func mainCommand() throws {
     try require(records.count == 1 && records[0].identifier == id, "Contact disappeared or is ambiguous; refresh")
     let contact = records[0]
     try validateApproval(contact, input, data)
-    guard let book = ABAddressBook.shared(),
-          let person = book.record(forUniqueId: id) as? ABPerson else {
-        throw Failure(message: "Contact could not be opened for a photo-only update; refresh")
-    }
-    try require(person.imageData() == nil, "Contact already has a photo; refusing to overwrite")
     let backup = URL(fileURLWithPath: backupPath)
     try require(!FileManager.default.fileExists(atPath: backup.path), "Backup already exists; refresh before retrying")
-    try person.vCardRepresentation().write(to: backup, options: .withoutOverwriting)
-    try require(person.setImageData(data), "Address Book rejected the photo")
-    try book.saveAndReturnError()
+    try require(FileManager.default.isExecutableFile(atPath: "/usr/bin/osascript") &&
+                FileManager.default.fileExists(atPath: script), "Contacts.app save script is missing")
+    try saveThroughContactsApp(script, id, file, backupPath)
     let saved = try fetch(store, id: id)
     try require(saved.count == 1 && hasPhoto(saved[0]), "Save returned but photo could not be verified; inspect Contacts before retrying")
     try emit(["saved": true, "id": id])
